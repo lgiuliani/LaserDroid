@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Touch button (TextView based: no theme tint surprises). -->
+    <style name="LdButton">
+        <item name="android:background">@drawable/bg_button</item>
+        <item name="android:textColor">@color/button_text</item>
+        <item name="android:drawableTint">@color/button_text</item>
+        <item name="android:gravity">center</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:drawablePadding">2dp</item>
+        <item name="android:paddingTop">4dp</item>
+        <item name="android:paddingBottom">4dp</item>
+        <item name="android:paddingStart">4dp</item>
+        <item name="android:paddingEnd">4dp</item>
+        <item name="android:layout_margin">3dp</item>
+    </style>
+
+    <style name="LdButton.Primary">
+        <item name="android:background">@drawable/bg_button_primary</item>
+        <item name="android:textColor">@color/button_text_on_color</item>
+        <item name="android:drawableTint">@color/button_text_on_color</item>
+    </style>
+
+    <style name="LdButton.Danger">
+        <item name="android:background">@drawable/bg_button_danger</item>
+        <item name="android:textColor">@color/button_text_on_color</item>
+        <item name="android:drawableTint">@color/button_text_on_color</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+
+    <!-- Navigation tab (bottom bar in portrait, rail in landscape). -->
+    <style name="LdTab">
+        <item name="android:background">@drawable/bg_tab</item>
+        <item name="android:textColor">@color/tab_text</item>
+        <item name="android:drawableTint">@color/tab_text</item>
+        <item name="android:gravity">center</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:drawablePadding">2dp</item>
+        <item name="android:paddingTop">6dp</item>
+        <item name="android:paddingBottom">4dp</item>
+    </style>
+
+    <!-- Small section label. -->
+    <style name="LdLabel">
+        <item name="android:textColor">@color/ld_text_secondary</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:paddingStart">4dp</item>
+        <item name="android:paddingTop">4dp</item>
+    </style>
+
+</resources>

@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!-- Console page, landscape: diagnostics left, log right. -->
+
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:padding="3dp">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/buttonDetectUsb"
+                style="@style/LdButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_search"
+                android:text="DETECT" />
+            <TextView
+                android:id="@+id/buttonStatus"
+                style="@style/LdButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_refresh"
+                android:text="STATUS" />
+
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/buttonSettings"
+                style="@style/LdButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_tune"
+                android:text="$$" />
+            <TextView
+                android:id="@+id/buttonBuildInfo"
+                style="@style/LdButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_info"
+                android:text="$I" />
+
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/buttonUnlock"
+                style="@style/LdButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_lock_open"
+                android:text="UNLOCK" />
+            <TextView
+                android:id="@+id/buttonReset"
+                style="@style/LdButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_replay"
+                android:text="RESET" />
+            <TextView
+                android:id="@+id/buttonClearLog"
+                style="@style/LdButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_delete"
+                android:text="CLEAR" />
+
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/editCommand"
+                android:layout_width="0dp"
+                android:layout_height="46dp"
+                android:layout_margin="3dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_input"
+                android:hint="G-code or $ command"
+                android:imeOptions="actionSend|flagNoExtractUi"
+                android:inputType="textCapCharacters|textNoSuggestions"
+                android:maxLines="1"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:textColor="@color/ld_text"
+                android:textColorHint="@color/ld_text_disabled"
+                android:textSize="15sp"
+                android:typeface="monospace" />
+
+            <ImageView
+                android:id="@+id/buttonSendCommand"
+                android:layout_width="56dp"
+                android:layout_height="46dp"
+                android:layout_margin="3dp"
+                android:background="@drawable/bg_button_primary"
+                android:clickable="true"
+                android:contentDescription="Send"
+                android:focusable="true"
+                android:padding="10dp"
+                android:src="@drawable/ic_send" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1.3"
+        android:orientation="vertical">
+
+        <ScrollView
+            android:id="@+id/logScrollView"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_margin="3dp"
+            android:layout_weight="1"
+            android:background="@color/ld_log_background"
+            android:fillViewport="true"
+            android:scrollbars="vertical">
+
+            <TextView
+                android:id="@+id/textLog"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:bufferType="editable"
+                android:padding="6dp"
+                android:textColor="#FFD0D6DB"
+                android:textIsSelectable="true"
+                android:textSize="11sp"
+                android:typeface="monospace" />
+
+        </ScrollView>
+
+    </LinearLayout>
+
+</LinearLayout>
