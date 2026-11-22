@@ -18,7 +18,15 @@ sealed interface GrblResponse {
         val machineY: Double?,
         val machineZ: Double?,
         val feedRate: Int?,
-        val spindleSpeed: Int?
+        val spindleSpeed: Int?,
+        val workX: Double? = null,
+        val workY: Double? = null,
+        val workZ: Double? = null,
+        val offsetX: Double? = null,
+        val offsetY: Double? = null,
+        val offsetZ: Double? = null,
+        val plannerBlocksFree: Int? = null,
+        val serialBytesFree: Int? = null
     ) : GrblResponse
 
     data class Message(
@@ -34,4 +42,4 @@ sealed interface GrblResponse {
         val value: String
     ) : GrblResponse
 
-}
+}

@@ -1,295 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
 
+<!-- Jog page, portrait: step and speed chips, dial, stop. -->
+
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
+    android:layout_height="match_parent"
     android:orientation="vertical"
     android:padding="4dp">
 
-    <!-- ========================================= -->
-    <!-- MAIN JOG AREA                             -->
-    <!-- Speed | Jog Dial | Step                  -->
-    <!-- ========================================= -->
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="250dp"
-        android:orientation="horizontal"
-        android:gravity="center">
-
-        <!-- ================================= -->
-        <!-- LEFT COLUMN : SPEED              -->
-        <!-- ================================= -->
-
-        <LinearLayout
-            android:layout_width="70dp"
-            android:layout_height="match_parent"
-            android:orientation="vertical"
-            android:gravity="center">
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center"
-                android:text="SPEED"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/textJogSpeedValue"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center"
-                android:text="500&#10;mm/min"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-
-            <!--
-                Horizontal SeekBar rotated vertically.
-
-                IMPORTANT:
-                layout_width is the physical slider length
-                BEFORE rotation.
-            -->
-
-            <FrameLayout
-                android:layout_width="70dp"
-                android:layout_height="190dp">
-
-                <SeekBar
-                    android:id="@+id/sliderJogSpeed"
-                    android:layout_width="180dp"
-                    android:layout_height="50dp"
-                    android:layout_gravity="center"
-                    android:max="8"
-                    android:progress="2"
-                    android:rotation="270" />
-
-            </FrameLayout>
-
-        </LinearLayout>
-
-        <!-- ================================= -->
-        <!-- CENTER : JOG DIAL                -->
-        <!-- ================================= -->
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:gravity="center">
-
-            <!-- Row 1 -->
-
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center">
-
-                <Button
-                    android:id="@+id/buttonJogNorthWest"
-                    android:layout_width="58dp"
-                    android:layout_height="58dp"
-                    android:minWidth="0dp"
-                    android:minHeight="0dp"
-                    android:padding="0dp"
-                    android:text="↖"
-                    android:textSize="24sp" />
-
-                <Button
-                    android:id="@+id/buttonJogNorth"
-                    android:layout_width="58dp"
-                    android:layout_height="58dp"
-                    android:minWidth="0dp"
-                    android:minHeight="0dp"
-                    android:padding="0dp"
-                    android:text="↑"
-                    android:textSize="24sp" />
-
-                <Button
-                    android:id="@+id/buttonJogNorthEast"
-                    android:layout_width="58dp"
-                    android:layout_height="58dp"
-                    android:minWidth="0dp"
-                    android:minHeight="0dp"
-                    android:padding="0dp"
-                    android:text="↗"
-                    android:textSize="24sp" />
-
-            </LinearLayout>
-
-            <!-- Row 2 -->
-
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center">
-
-                <Button
-                    android:id="@+id/buttonJogWest"
-                    android:layout_width="58dp"
-                    android:layout_height="58dp"
-                    android:minWidth="0dp"
-                    android:minHeight="0dp"
-                    android:padding="0dp"
-                    android:text="←"
-                    android:textSize="24sp" />
-
-                <!--
-                    HOME IS HERE:
-                    exact center of Jog Dial.
-                -->
-
-                <Button
-                    android:id="@+id/buttonJogHome"
-                    android:layout_width="58dp"
-                    android:layout_height="58dp"
-                    android:minWidth="0dp"
-                    android:minHeight="0dp"
-                    android:padding="1dp"
-                    android:text="HOME"
-                    android:textSize="9sp"
-                    android:textStyle="bold" />
-
-                <Button
-                    android:id="@+id/buttonJogEast"
-                    android:layout_width="58dp"
-                    android:layout_height="58dp"
-                    android:minWidth="0dp"
-                    android:minHeight="0dp"
-                    android:padding="0dp"
-                    android:text="→"
-                    android:textSize="24sp" />
-
-            </LinearLayout>
-
-            <!-- Row 3 -->
-
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center">
-
-                <Button
-                    android:id="@+id/buttonJogSouthWest"
-                    android:layout_width="58dp"
-                    android:layout_height="58dp"
-                    android:minWidth="0dp"
-                    android:minHeight="0dp"
-                    android:padding="0dp"
-                    android:text="↙"
-                    android:textSize="24sp" />
-
-                <Button
-                    android:id="@+id/buttonJogSouth"
-                    android:layout_width="58dp"
-                    android:layout_height="58dp"
-                    android:minWidth="0dp"
-                    android:minHeight="0dp"
-                    android:padding="0dp"
-                    android:text="↓"
-                    android:textSize="24sp" />
-
-                <Button
-                    android:id="@+id/buttonJogSouthEast"
-                    android:layout_width="58dp"
-                    android:layout_height="58dp"
-                    android:minWidth="0dp"
-                    android:minHeight="0dp"
-                    android:padding="0dp"
-                    android:text="↘"
-                    android:textSize="24sp" />
-
-            </LinearLayout>
-
-        </LinearLayout>
-
-        <!-- ================================= -->
-        <!-- RIGHT COLUMN : STEP              -->
-        <!-- ================================= -->
-
-        <LinearLayout
-            android:layout_width="70dp"
-            android:layout_height="match_parent"
-            android:orientation="vertical"
-            android:gravity="center">
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center"
-                android:text="STEP"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/textJogStepValue"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center"
-                android:text="1&#10;mm"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-
-            <FrameLayout
-                android:layout_width="70dp"
-                android:layout_height="190dp">
-
-                <SeekBar
-                    android:id="@+id/sliderJogStep"
-                    android:layout_width="180dp"
-                    android:layout_height="50dp"
-                    android:layout_gravity="center"
-                    android:max="9"
-                    android:progress="3"
-                    android:rotation="270" />
-
-            </FrameLayout>
-
-        </LinearLayout>
-
-    </LinearLayout>
-
-    <!-- ========================================= -->
-    <!-- POSITION AND MACHINE STATE                -->
-    <!-- ========================================= -->
-
     <TextView
-        android:id="@+id/textJogPosition"
+        style="@style/LdLabel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center"
-        android:paddingTop="3dp"
-        android:text="X 0.000     Y 0.000"
-        android:textSize="14sp"
-        android:textStyle="bold" />
+        android:text="STEP (mm)" />
+
+    <com.laserdroid.ui.common.ChoiceChipsView
+        android:id="@+id/chipsJogStep"
+        android:layout_width="match_parent"
+        android:layout_height="46dp" />
 
     <TextView
-        android:id="@+id/textJogMachineState"
+        style="@style/LdLabel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center"
-        android:paddingBottom="3dp"
-        android:text="DISCONNECTED"
-        android:textSize="12sp"
-        android:textStyle="bold" />
+        android:text="SPEED (mm/min)" />
 
-    <!-- ========================================= -->
-    <!-- JOG CANCEL                                -->
-    <!-- ========================================= -->
+    <com.laserdroid.ui.common.ChoiceChipsView
+        android:id="@+id/chipsJogSpeed"
+        android:layout_width="match_parent"
+        android:layout_height="46dp" />
 
-    <Button
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="6dp">
+
+        <com.laserdroid.ui.jog.JogDialView
+            android:id="@+id/jogDial"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="center" />
+
+    </FrameLayout>
+
+    <TextView
         android:id="@+id/buttonJogCancel"
+        style="@style/LdButton.Danger"
         android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:minHeight="0dp"
-        android:text="CANCEL JOG"
-        android:textSize="13sp"
-        android:textStyle="bold" />
+        android:layout_height="56dp"
+        android:drawableStart="@drawable/ic_close"
+        android:paddingStart="24dp"
+        android:paddingEnd="48dp"
+        android:text="STOP JOG" />
 
 </LinearLayout>

@@ -14,22 +14,45 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import com.laserdroid.controllers.api.CommandResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeout
-import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CoroutineStart
 import com.laserdroid.communication.api.ConnectionState
 import com.laserdroid.controllers.api.JogRequest
-import java.math.BigDecimal
 
 class GrblController(
     private val transport: SerialTransport
 ) : CncController {
+
+    companion object {
+
+        /**
+         * Default acknowledgement timeout for interactive commands
+         * (settings, jog, diagnostics).
+         */
+        const val DEFAULT_COMMAND_TIMEOUT_MILLIS = 2_000L
+
+        private const val RESPONSE_POLL_MILLIS = 50L
+    }
+
+    /*
+     * Timestamp of the last data received from GRBL.
+     * Used by the inactivity timeout of executeCommand().
+     */
+    @Volatile
+    private var lastReceiveMillis = 0L
+
+    private val _workCoordinateOffset =
+        MutableStateFlow(MachinePosition.ZERO)
+
+    override val workCoordinateOffset: StateFlow<MachinePosition>
+        get() = _workCoordinateOffset
 
     private val commandMutex = Mutex()
 
@@ -90,12 +113,17 @@ class GrblController(
 
                     ConnectionState.Disconnected -> {
 
+                        /*
+                         * Publish the state before releasing the
+                         * pending command, so that callers observe
+                         * a consistent machine state.
+                         */
+                        _machineState.value =
+                            MachineState.Disconnected
+
                         pendingCommand?.complete(
                             CommandResult.Disconnected
                         )
-
-                        _machineState.value =
-                            MachineState.Disconnected
                     }
 
                     ConnectionState.Connecting -> {
@@ -111,15 +139,15 @@ class GrblController(
 
                     is ConnectionState.Error -> {
 
-                        pendingCommand?.complete(
-                            CommandResult.Disconnected
-                        )
-
                         _machineState.value =
                             MachineState.Error(
                                 state.cause.message
                                     ?: "Transport error"
                             )
+
+                        pendingCommand?.complete(
+                            CommandResult.Disconnected
+                        )
                     }
                 }
             }
@@ -135,16 +163,25 @@ class GrblController(
 
         transport.connect()
 
+        val connectionState =
+            transport.connectionState.value
+
         if (
-            transport.connectionState.value ==
+            connectionState !=
             ConnectionState.Connected
         ) {
-            _events.emit(
-                ControllerEvent.Connected
-            )
+            val message =
+                (connectionState as? ConnectionState.Error)
+                    ?.cause
+                    ?.message
+                    ?: "Serial transport is not connected"
 
-            requestStatus()
+            throw IllegalStateException(message)
         }
+
+        _events.emit(
+            ControllerEvent.Connected
+        )
 
         /*
          * Synchronize LaserDroid with the actual
@@ -179,6 +216,16 @@ class GrblController(
 
     override suspend fun executeCommand(
         command: String
+    ): CommandResult =
+        executeCommand(
+            command = command,
+            inactivityTimeoutMillis =
+                DEFAULT_COMMAND_TIMEOUT_MILLIS
+        )
+
+    override suspend fun executeCommand(
+        command: String,
+        inactivityTimeoutMillis: Long
     ): CommandResult = commandMutex.withLock {
 
         val response =
@@ -191,13 +238,19 @@ class GrblController(
                 "$command\n".encodeToByteArray()
             )
 
-            withTimeout(2_000.milliseconds) {
-                response.await()
-            }
+            awaitResponse(
+                response = response,
+                sentAtMillis = System.currentTimeMillis(),
+                inactivityTimeoutMillis = inactivityTimeoutMillis
+            )
         } catch (
-            exception: TimeoutCancellationException
+            exception: CancellationException
         ) {
-            CommandResult.Timeout
+            /*
+             * CancellationException is an IllegalStateException:
+             * it must be rethrown, not reported as Disconnected.
+             */
+            throw exception
         } catch (
             exception: IllegalStateException
         ) {
@@ -205,6 +258,40 @@ class GrblController(
         } finally {
             if (pendingCommand === response) {
                 pendingCommand = null
+            }
+        }
+    }
+
+    /*
+     * Waits for ok/error/ALARM. The timeout is restarted by any
+     * incoming data, so a long move that keeps GRBL busy (planner
+     * full) does not fail as long as status reports keep arriving.
+     */
+    private suspend fun awaitResponse(
+        response: CompletableDeferred<CommandResult>,
+        sentAtMillis: Long,
+        inactivityTimeoutMillis: Long
+    ): CommandResult {
+
+        while (true) {
+
+            val result =
+                withTimeoutOrNull(RESPONSE_POLL_MILLIS) {
+                    response.await()
+                }
+
+            if (result != null) {
+                return result
+            }
+
+            val lastActivity =
+                maxOf(sentAtMillis, lastReceiveMillis)
+
+            if (
+                System.currentTimeMillis() - lastActivity >=
+                inactivityTimeoutMillis
+            ) {
+                return CommandResult.Timeout
             }
         }
     }
@@ -240,6 +327,9 @@ class GrblController(
         ) {
 
             transport.incomingData.collect { data ->
+
+                lastReceiveMillis =
+                    System.currentTimeMillis()
 
                 val completedLines =
                     lineBuffer.append(data)
@@ -342,10 +432,46 @@ class GrblController(
         status: GrblResponse.Status
     ) {
 
-        _machineState.value =
-            mapMachineState(
-                status.state
-            )
+        /*
+         * A report processed after the link was lost must not
+         * hide the Disconnected / Error state.
+         */
+        if (
+            transport.connectionState.value !=
+            ConnectionState.Connected
+        ) {
+            return
+        }
+
+        /*
+         * Compare-and-set: if the connection collector publishes
+         * Disconnected concurrently, the update is retried and
+         * then discarded.
+         */
+        _machineState.update { current ->
+            if (
+                transport.connectionState.value !=
+                ConnectionState.Connected
+            ) {
+                current
+            } else {
+                mapMachineState(
+                    status.state
+                )
+            }
+        }
+
+        if (
+            status.offsetX != null &&
+            status.offsetY != null
+        ) {
+            _workCoordinateOffset.value =
+                MachinePosition(
+                    x = status.offsetX,
+                    y = status.offsetY,
+                    z = status.offsetZ ?: 0.0
+                )
+        }
 
         if (
             status.machineX != null &&
@@ -357,6 +483,23 @@ class GrblController(
                     x = status.machineX,
                     y = status.machineY,
                     z = status.machineZ
+                )
+        } else if (
+            status.workX != null &&
+            status.workY != null
+        ) {
+            /*
+             * $10 configured for WPos reports:
+             * MPos = WPos + WCO.
+             */
+            val offset =
+                _workCoordinateOffset.value
+
+            _machinePosition.value =
+                MachinePosition(
+                    x = status.workX + offset.x,
+                    y = status.workY + offset.y,
+                    z = (status.workZ ?: 0.0) + offset.z
                 )
         }
     }
@@ -435,6 +578,18 @@ class GrblController(
             "alarm" ->
                 MachineState.Alarm
 
+            /*
+             * Safety door: motion is halted, treat as Hold.
+             */
+            "door" ->
+                MachineState.Hold
+
+            /*
+             * Homing cycle: the machine is busy.
+             */
+            "home" ->
+                MachineState.Running
+
             else ->
                 _machineState.value
         }
@@ -475,4 +630,4 @@ class GrblController(
         )
     }
 
-}
+}

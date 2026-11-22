@@ -37,11 +37,11 @@ data class JogRequest(
         }
 
         require(
-            x != 0.0 ||
-                    y != 0.0 ||
-                    z != 0.0
+            (x ?: 0.0) != 0.0 ||
+                    (y ?: 0.0) != 0.0 ||
+                    (z ?: 0.0) != 0.0
         ) {
             "At least one jog distance must be non-zero"
         }
     }
-}
+}

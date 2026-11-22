@@ -1,149 +1,157 @@
 <?xml version="1.0" encoding="utf-8"?>
 
+<!-- Main screen, landscape: status bar, navigation rail, page. -->
+
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="horizontal"
-    android:padding="6dp">
+    android:background="@color/ld_background"
+    android:orientation="vertical">
 
-    <!-- Left side -->
+    <!-- Status bar: connection, machine state, position, job -->
 
     <LinearLayout
-        android:layout_width="0dp"
-        android:layout_height="match_parent"
-        android:layout_weight="1.15"
-        android:orientation="vertical"
-        android:paddingEnd="4dp">
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:background="@color/ld_bar"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="4dp"
+        android:paddingEnd="6dp">
+
+        <ImageView
+            android:id="@+id/buttonConnect"
+            android:layout_width="44dp"
+            android:layout_height="40dp"
+            android:background="@drawable/bg_button"
+            android:clickable="true"
+            android:contentDescription="Connect / disconnect"
+            android:focusable="true"
+            android:padding="8dp"
+            android:src="@drawable/ic_usb" />
 
         <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingBottom="3dp"
-            android:text="LaserDroid"
-            android:textSize="16sp"
+            android:id="@+id/textMachineState"
+            android:layout_width="wrap_content"
+            android:layout_height="30dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_state_chip"
+            android:gravity="center"
+            android:minWidth="76dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:text="OFFLINE"
+            android:textColor="#FF000000"
+            android:textSize="13sp"
             android:textStyle="bold" />
 
-        <LinearLayout
-            android:layout_width="match_parent"
+        <TextView
+            android:id="@+id/textPosition"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:gravity="end"
+            android:maxLines="1"
+            android:text="X  ---.---  Y  ---.---"
+            android:textColor="@color/ld_text"
+            android:textSize="19sp"
+            android:textStyle="bold"
+            android:typeface="monospace" />
 
-            <Button
-                android:id="@+id/buttonDetectUsb"
-                android:layout_width="0dp"
-                android:layout_height="38dp"
-                android:layout_weight="1"
-                android:minWidth="0dp"
-                android:minHeight="0dp"
-                android:text="Detect"
-                android:textSize="8sp" />
-
-            <Button
-                android:id="@+id/buttonConnectUsb"
-                android:layout_width="0dp"
-                android:layout_height="38dp"
-                android:layout_weight="1"
-                android:minWidth="0dp"
-                android:minHeight="0dp"
-                android:text="Connect"
-                android:textSize="8sp" />
-
-            <Button
-                android:id="@+id/buttonStatus"
-                android:layout_width="0dp"
-                android:layout_height="38dp"
-                android:layout_weight="1"
-                android:minWidth="0dp"
-                android:minHeight="0dp"
-                android:text="Status"
-                android:textSize="8sp" />
-
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
+        <TextView
+            android:id="@+id/textJobBadge"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/buttonSettings"
-                android:layout_width="0dp"
-                android:layout_height="38dp"
-                android:layout_weight="1"
-                android:minWidth="0dp"
-                android:minHeight="0dp"
-                android:text="Settings"
-                android:textSize="8sp" />
-
-            <Button
-                android:id="@+id/buttonBuildInfo"
-                android:layout_width="0dp"
-                android:layout_height="38dp"
-                android:layout_weight="1"
-                android:minWidth="0dp"
-                android:minHeight="0dp"
-                android:text="GRBL Info"
-                android:textSize="8sp" />
-
-            <Button
-                android:id="@+id/buttonClearLog"
-                android:layout_width="0dp"
-                android:layout_height="38dp"
-                android:layout_weight="1"
-                android:minWidth="0dp"
-                android:minHeight="0dp"
-                android:text="Clear"
-                android:textSize="8sp" />
-
-        </LinearLayout>
-
-        <com.laserdroid.ui.jog.JogPanelView
-            android:id="@+id/jogPanel"
-            android:layout_width="match_parent"
-
-            android:layout_height="0dp"
-            android:layout_weight="1" />
+            android:layout_marginStart="8dp"
+            android:textColor="@color/ld_accent"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
 
     </LinearLayout>
 
-    <!-- Right side : LOG -->
+    <!-- Last log message (tap: console) -->
+
+    <TextView
+        android:id="@+id/textLastMessage"
+        android:layout_width="match_parent"
+        android:layout_height="22dp"
+        android:background="@color/ld_log_background"
+        android:ellipsize="end"
+        android:gravity="center_vertical"
+        android:maxLines="1"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:textColor="@color/ld_text_secondary"
+        android:textSize="11sp"
+        android:typeface="monospace" />
 
     <LinearLayout
-        android:layout_width="0dp"
-        android:layout_height="match_parent"
-        android:layout_weight="0.85"
-        android:orientation="vertical"
-        android:paddingStart="4dp">
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingBottom="3dp"
-            android:text="LOG"
-            android:textSize="11sp"
-            android:textStyle="bold" />
-
-        <ScrollView
-            android:id="@+id/logScrollView"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:background="#101010"
-            android:fillViewport="true"
-            android:scrollbars="vertical">
+        <LinearLayout
+            android:layout_width="72dp"
+            android:layout_height="match_parent"
+            android:background="@color/ld_bar"
+            android:orientation="vertical">
 
             <TextView
-                android:id="@+id/textUsbDevices"
+                android:id="@+id/tabJog"
+                style="@style/LdTab"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:padding="6dp"
-                android:textColor="#E8E8E8"
-                android:textIsSelectable="true"
-                android:textSize="9sp"
-                android:typeface="monospace" />
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_open_with"
+                android:text="JOG" />
+            <TextView
+                android:id="@+id/tabJob"
+                style="@style/LdTab"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_play"
+                android:text="JOB" />
+            <TextView
+                android:id="@+id/tabConsole"
+                style="@style/LdTab"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_terminal"
+                android:text="CONSOLE" />
 
-        </ScrollView>
+        </LinearLayout>
+
+        <FrameLayout
+            android:id="@+id/pageContainer"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1">
+
+            <com.laserdroid.ui.jog.JogPanelView
+                android:id="@+id/jogPanel"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <com.laserdroid.ui.job.JobPanelView
+                android:id="@+id/jobPanelView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
+
+            <include
+                android:id="@+id/consolePanel"
+                layout="@layout/view_console_panel"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
+
+        </FrameLayout>
 
     </LinearLayout>
 

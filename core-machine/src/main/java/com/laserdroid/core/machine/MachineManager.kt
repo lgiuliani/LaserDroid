@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import com.laserdroid.controllers.api.ControllerEvent
 
@@ -24,6 +25,11 @@ class MachineManager(
     private val controller: CncController,
     private val statusPollIntervalMillis: Long = 200L
 ) {
+
+    companion object {
+        private const val CONSOLE_TIMEOUT_MILLIS = 5_000L
+        private const val HOMING_TIMEOUT_MILLIS = 120_000L
+    }
 
     val controllerEvents:
             Flow<ControllerEvent>
@@ -53,9 +59,76 @@ class MachineManager(
             Flow<MachineEvent> =
         _events.asSharedFlow()
 
+    private val _settings =
+        MutableStateFlow<Map<Int, String>>(
+            emptyMap()
+        )
+
+    /**
+     * Controller settings received so far ($$ response),
+     * for example 110 -> "6000.000".
+     */
+    val settings:
+            StateFlow<Map<Int, String>> =
+        _settings.asStateFlow()
+
     init {
         observeController()
     }
+
+    /*
+     * ----------------------------------------------------
+     * JOB OWNERSHIP
+     * ----------------------------------------------------
+     */
+
+    /**
+     * Gives exclusive control of the machine to a job.
+     *
+     * Returns false if a job is already active or if the
+     * machine is not Idle.
+     */
+    fun beginJob(): Boolean {
+
+        while (true) {
+
+            val current =
+                _snapshot.value
+
+            if (
+                current.jobActive ||
+                current.machineState != MachineState.Idle
+            ) {
+                return false
+            }
+
+            if (
+                _snapshot.compareAndSet(
+                    current,
+                    current.copy(
+                        jobActive = true
+                    )
+                )
+            ) {
+                return true
+            }
+        }
+    }
+
+    /**
+     * Releases the machine after a job has ended.
+     */
+    fun endJob() {
+
+        _snapshot.update {
+            it.copy(
+                jobActive = false
+            )
+        }
+    }
+
+    val isJobActive: Boolean
+        get() = snapshot.value.jobActive
 
     private fun observeController() {
 
@@ -64,8 +137,8 @@ class MachineManager(
             controller.machineState.collect {
                     state ->
 
-                _snapshot.value =
-                    _snapshot.value.copy(
+                _snapshot.update {
+                    it.copy(
                         connectionState =
                             mapConnectionState(
                                 state
@@ -77,6 +150,22 @@ class MachineManager(
                         lastUpdateTimestamp =
                             System.currentTimeMillis()
                     )
+                }
+            }
+        }
+
+        scope.launch {
+
+            controller.events.collect {
+                    event ->
+
+                if (
+                    event is ControllerEvent.SettingReceived
+                ) {
+                    _settings.value =
+                        _settings.value +
+                                (event.number to event.value)
+                }
             }
         }
 
@@ -85,14 +174,15 @@ class MachineManager(
             controller.machinePosition.collect {
                     position ->
 
-                _snapshot.value =
-                    _snapshot.value.copy(
+                _snapshot.update {
+                    it.copy(
                         position =
                             position,
 
                         lastUpdateTimestamp =
                             System.currentTimeMillis()
                     )
+                }
 
                 _events.tryEmit(
                     MachineEvent.PositionUpdated(
@@ -105,8 +195,8 @@ class MachineManager(
 
     suspend fun connect() {
 
-        _snapshot.value =
-            _snapshot.value.copy(
+        _snapshot.update {
+            it.copy(
                 connectionState =
                     MachineConnectionState.CONNECTING,
 
@@ -116,6 +206,7 @@ class MachineManager(
                 lastUpdateTimestamp =
                     System.currentTimeMillis()
             )
+        }
 
         try {
 
@@ -131,8 +222,8 @@ class MachineManager(
             exception: Exception
         ) {
 
-            _snapshot.value =
-                _snapshot.value.copy(
+            _snapshot.update {
+                it.copy(
                     connectionState =
                         MachineConnectionState.ERROR,
 
@@ -145,6 +236,7 @@ class MachineManager(
                     lastUpdateTimestamp =
                         System.currentTimeMillis()
                 )
+            }
 
             _events.emit(
                 MachineEvent.Error(
@@ -186,6 +278,10 @@ class MachineManager(
     suspend fun requestSettings():
             CommandResult {
 
+        if (isJobActive) {
+            return CommandResult.Rejected(code = null)
+        }
+
         return controller.executeCommand(
             "\$\$"
         )
@@ -194,9 +290,80 @@ class MachineManager(
     suspend fun requestBuildInfo():
             CommandResult {
 
+        if (isJobActive) {
+            return CommandResult.Rejected(code = null)
+        }
+
         return controller.executeCommand(
             "\$I"
         )
+    }
+
+    /**
+     * Sends $X (kill alarm lock). Refused during a job.
+     */
+    suspend fun unlock():
+            CommandResult {
+
+        if (isJobActive) {
+            return CommandResult.Rejected(code = null)
+        }
+
+        val result =
+            controller.executeCommand(
+                "\$X"
+            )
+
+        controller.requestStatus()
+
+        return result
+    }
+
+    /**
+     * Sends one console line (G-code or $ command).
+     * Refused during a job. Homing ($H) may last long:
+     * its acknowledgement timeout is extended.
+     */
+    suspend fun sendCommand(
+        command: String
+    ): CommandResult {
+
+        if (isJobActive) {
+            return CommandResult.Rejected(code = null)
+        }
+
+        val line =
+            command.trim()
+
+        if (line.isEmpty()) {
+            return CommandResult.Acknowledged
+        }
+
+        val timeout =
+            if (line.uppercase().startsWith("\$H")) {
+                HOMING_TIMEOUT_MILLIS
+            } else {
+                CONSOLE_TIMEOUT_MILLIS
+            }
+
+        val result =
+            controller.executeCommand(
+                line,
+                timeout
+            )
+
+        controller.requestStatus()
+
+        return result
+    }
+
+    /**
+     * Soft reset (Ctrl-X): immediate stop, laser off.
+     * Always allowed.
+     */
+    suspend fun softReset() {
+
+        controller.stop()
     }
 
     suspend fun executeJog(
@@ -586,4 +753,4 @@ class MachineManager(
 
         scope.cancel()
     }
-}
+}

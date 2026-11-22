@@ -11,18 +11,30 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.provider.OpenableColumns
 import androidx.core.app.NotificationCompat
 import com.laserdroid.MainActivity
 import com.laserdroid.R
 import com.laserdroid.communication.usb.UsbSerialConnection
 import com.laserdroid.communication.usb.UsbSerialTransport
+import com.laserdroid.controllers.api.MachinePosition
 import com.laserdroid.controllers.api.MachineState
 import com.laserdroid.controllers.grbl.GrblController
+import com.laserdroid.core.gcode.FileGCodeSource
+import com.laserdroid.core.gcode.GCodeAnalysis
+import com.laserdroid.core.gcode.MachineProfile
+import com.laserdroid.core.jobs.JobManager
+import com.laserdroid.core.jobs.JobSnapshot
+import com.laserdroid.core.jobs.JobState
 import com.laserdroid.core.machine.MachineManager
 import com.laserdroid.core.machine.MachineSnapshot
+import java.io.File
+import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,6 +44,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MachineService : Service() {
 
@@ -45,6 +58,12 @@ class MachineService : Service() {
 
         private const val NOTIFICATION_ID =
             1001
+
+        private const val LIBRARY_DIRECTORY =
+            "library"
+
+        private const val WAKE_LOCK_TAG =
+            "LaserDroid:job"
     }
 
     /*
@@ -137,6 +156,44 @@ class MachineService : Service() {
     val isMachineConnected: Boolean
         get() = snapshot.value.isConnected
 
+    /**
+     * Current work coordinate offset (WCO).
+     * Work position = machine position - offset.
+     */
+    val workCoordinateOffset: MachinePosition
+        get() =
+            grblController
+                ?.workCoordinateOffset
+                ?.value
+                ?: MachinePosition.ZERO
+
+    /*
+     * ----------------------------------------------------
+     * JOB MANAGER
+     * ----------------------------------------------------
+     *
+     * Lives as long as the Service, independently of the
+     * USB session. A lost connection marks the job
+     * DISCONNECTED: it is never resumed automatically.
+     */
+
+    val jobManager =
+        JobManager()
+
+    val jobSnapshot:
+            StateFlow<JobSnapshot>
+        get() = jobManager.snapshot
+
+    /*
+     * Keeps the CPU running while a job is active,
+     * screen off included.
+     */
+    private var jobWakeLock:
+            PowerManager.WakeLock? = null
+
+    private var jobObserverJob:
+            Job? = null
+
     /*
      * ----------------------------------------------------
      * USB DETACH RECEIVER
@@ -205,6 +262,8 @@ class MachineService : Service() {
         registerUsbDetachReceiver()
 
         createNotificationChannel()
+
+        startJobObserver()
 
         startForeground(
             NOTIFICATION_ID,
@@ -397,6 +456,22 @@ class MachineService : Service() {
              */
             manager.connect()
 
+            jobManager.attachMachine(
+                controller = controller,
+                machine = manager
+            )
+
+            /*
+             * Read the GRBL settings ($$) once: travel and
+             * max rates are used by the G-code analysis.
+             * A failure here does not fail the connection.
+             */
+            runCatching {
+                manager.requestSettings()
+            }
+
+            Unit
+
         }.onSuccess {
 
             updateNotificationFromSnapshot(
@@ -503,7 +578,10 @@ class MachineService : Service() {
          * new GrblController
          * new MachineManager
          */
-        closeMachineBackend()
+        closeMachineBackend(
+            reason =
+                "USB disconnected"
+        )
 
         updateNotification(
             title =
@@ -571,7 +649,17 @@ class MachineService : Service() {
      * ----------------------------------------------------
      */
 
-    private fun closeMachineBackend() {
+    private fun closeMachineBackend(
+        reason: String = "Machine disconnected"
+    ) {
+
+        /*
+         * An active job becomes DISCONNECTED.
+         * Never resumed automatically.
+         */
+        jobManager.detachMachine(
+            reason
+        )
 
         /*
          * Stop observing the old MachineManager.
@@ -611,6 +699,258 @@ class MachineService : Service() {
 
             usbConnection.close()
         }
+    }
+
+    /*
+     * ----------------------------------------------------
+     * G-CODE LIBRARY AND JOB LOADING
+     * ----------------------------------------------------
+     */
+
+    /**
+     * Copies the document selected with the Storage Access
+     * Framework into the private library, then analyzes it.
+     *
+     * The copy keeps the program available even if the
+     * temporary SAF permission is revoked.
+     */
+    suspend fun importAndLoad(
+        uri: Uri
+    ): Result<GCodeAnalysis> {
+
+        val file =
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    copyToLibrary(uri)
+                }
+            }.getOrElse { exception ->
+                return Result.failure(exception)
+            }
+
+        return loadLibraryFile(file)
+    }
+
+    suspend fun loadLibraryFile(
+        file: File
+    ): Result<GCodeAnalysis> {
+
+        val profile =
+            machineManager
+                ?.settings
+                ?.value
+                ?.takeIf { it.isNotEmpty() }
+                ?.let {
+                    MachineProfile.fromGrblSettings(it)
+                }
+
+        return jobManager.load(
+            newSource =
+                FileGCodeSource(file),
+
+            profile =
+                profile
+        )
+    }
+
+    private fun copyToLibrary(
+        uri: Uri
+    ): File {
+
+        val directory =
+            File(
+                filesDir,
+                LIBRARY_DIRECTORY
+            ).apply {
+                mkdirs()
+            }
+
+        val target =
+            File(
+                directory,
+                sanitizeFileName(
+                    queryDisplayName(uri)
+                        ?: "program.nc"
+                )
+            )
+
+        val temporary =
+            File(
+                directory,
+                target.name + ".part"
+            )
+
+        contentResolver
+            .openInputStream(uri)
+            ?.use { input ->
+
+                temporary
+                    .outputStream()
+                    .use { output ->
+                        input.copyTo(
+                            output,
+                            bufferSize = 64 * 1024
+                        )
+                    }
+            }
+            ?: throw IllegalStateException(
+                "Cannot open the selected file"
+            )
+
+        if (
+            target.exists() &&
+            !target.delete()
+        ) {
+            throw IllegalStateException(
+                "Cannot replace ${target.name}"
+            )
+        }
+
+        if (!temporary.renameTo(target)) {
+            throw IllegalStateException(
+                "Cannot save ${target.name}"
+            )
+        }
+
+        return target
+    }
+
+    private fun queryDisplayName(
+        uri: Uri
+    ): String? {
+
+        return runCatching {
+
+            contentResolver.query(
+                uri,
+                arrayOf(
+                    OpenableColumns.DISPLAY_NAME
+                ),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+
+                if (cursor.moveToFirst()) {
+                    cursor.getString(0)
+                } else {
+                    null
+                }
+            }
+        }.getOrNull()
+    }
+
+    /*
+     * Keeps only a safe file name: no path separators,
+     * no hidden files.
+     */
+    private fun sanitizeFileName(
+        name: String
+    ): String {
+
+        val cleaned =
+            name
+                .substringAfterLast('/')
+                .substringAfterLast('\\')
+                .replace(
+                    Regex("[^A-Za-z0-9._ -]"),
+                    "_"
+                )
+                .trim()
+                .trimStart('.')
+
+        return cleaned.ifEmpty {
+            "program.nc"
+        }
+    }
+
+    /*
+     * ----------------------------------------------------
+     * JOB OBSERVATION: WAKE LOCK + NOTIFICATION
+     * ----------------------------------------------------
+     */
+
+    private fun startJobObserver() {
+
+        jobObserverJob?.cancel()
+
+        jobObserverJob =
+            serviceScope.launch {
+
+                var lastState: JobState? = null
+                var lastPercent = -1
+
+                jobManager.snapshot.collect { job ->
+
+                    updateJobWakeLock(
+                        job.state.isActive
+                    )
+
+                    val percent =
+                        job.percent.toInt()
+
+                    /*
+                     * Refresh the notification on state
+                     * changes and every 1%, not on every
+                     * acknowledged line.
+                     */
+                    if (
+                        job.state != lastState ||
+                        percent != lastPercent
+                    ) {
+                        lastState = job.state
+                        lastPercent = percent
+
+                        updateNotificationFromSnapshot(
+                            snapshot.value
+                        )
+                    }
+                }
+            }
+    }
+
+    private fun updateJobWakeLock(
+        active: Boolean
+    ) {
+
+        if (active) {
+
+            if (jobWakeLock?.isHeld == true) {
+                return
+            }
+
+            val powerManager =
+                getSystemService(
+                    POWER_SERVICE
+                ) as PowerManager
+
+            jobWakeLock =
+                powerManager
+                    .newWakeLock(
+                        PowerManager.PARTIAL_WAKE_LOCK,
+                        WAKE_LOCK_TAG
+                    )
+                    .apply {
+                        setReferenceCounted(false)
+                        acquire()
+                    }
+
+        } else {
+
+            releaseJobWakeLock()
+        }
+    }
+
+    private fun releaseJobWakeLock() {
+
+        runCatching {
+
+            jobWakeLock
+                ?.takeIf { it.isHeld }
+                ?.release()
+        }
+
+        jobWakeLock =
+            null
     }
 
     /*
@@ -772,9 +1112,24 @@ class MachineService : Service() {
                 )
             }
 
+        val job =
+            jobManager.snapshot.value
+
+        val title =
+            if (job.state.isActive) {
+                String.format(
+                    Locale.US,
+                    "LaserDroid job %s %.1f%%",
+                    job.state.name,
+                    job.percent
+                )
+            } else {
+                "LaserDroid machine"
+            }
+
         updateNotification(
             title =
-                "LaserDroid machine",
+                title,
 
             content =
                 content
@@ -829,7 +1184,16 @@ class MachineService : Service() {
             )
         }
 
-        closeMachineBackend()
+        closeMachineBackend(
+            reason =
+                "Service stopped"
+        )
+
+        jobObserverJob?.cancel()
+
+        releaseJobWakeLock()
+
+        jobManager.close()
 
         _snapshot.value =
             MachineSnapshot.initial()
@@ -838,4 +1202,4 @@ class MachineService : Service() {
 
         super.onDestroy()
     }
-}
+}

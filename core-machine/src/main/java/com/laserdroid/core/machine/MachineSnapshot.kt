@@ -7,7 +7,12 @@ data class MachineSnapshot(
     val connectionState: MachineConnectionState,
     val machineState: MachineState,
     val position: MachinePosition,
-    val lastUpdateTimestamp: Long
+    val lastUpdateTimestamp: Long,
+    /**
+     * True while a job owns the machine. Manual commands
+     * (Jog, HOME, settings) are refused.
+     */
+    val jobActive: Boolean = false
 ) {
 
     val isConnected: Boolean
@@ -17,8 +22,11 @@ data class MachineSnapshot(
 
     val canJog: Boolean
         get() =
-            machineState == MachineState.Idle ||
-                    machineState == MachineState.Jog
+            !jobActive &&
+                    (
+                            machineState == MachineState.Idle ||
+                                    machineState == MachineState.Jog
+                            )
 
     companion object {
 

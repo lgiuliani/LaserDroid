@@ -46,6 +46,8 @@ dependencies {
     implementation(project(":controllers-api"))
     implementation(project(":controllers-grbl"))
     implementation(project(":core-machine"))
+    implementation(project(":core-gcode"))
+    implementation(project(":core-jobs"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("androidx.constraintlayout:constraintlayout:2.2.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0")

@@ -2,4 +2,28 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- LaserDroid dark palette -->
+    <color name="ld_background">#FF101214</color>
+    <color name="ld_bar">#FF16191D</color>
+    <color name="ld_surface">#FF22262B</color>
+    <color name="ld_surface_pressed">#FF333941</color>
+    <color name="ld_surface_disabled">#FF181B1E</color>
+    <color name="ld_border">#FF30353C</color>
+    <color name="ld_log_background">#FF0A0B0C</color>
+    <color name="ld_text">#FFECEFF1</color>
+    <color name="ld_text_secondary">#FF9AA4AE</color>
+    <color name="ld_text_disabled">#FF555B61</color>
+    <color name="ld_accent">#FFFF7A1A</color>
+    <color name="ld_accent_pressed">#FFC65A0A</color>
+    <color name="ld_danger">#FFD32F2F</color>
+    <color name="ld_danger_pressed">#FF9A2020</color>
+    <color name="ld_danger_disabled">#FF3A1C1C</color>
+
+    <!-- Machine states -->
+    <color name="ld_state_idle">#FF43A047</color>
+    <color name="ld_state_run">#FF1E88E5</color>
+    <color name="ld_state_hold">#FFFFB300</color>
+    <color name="ld_state_alarm">#FFE53935</color>
+    <color name="ld_state_offline">#FF546E7A</color>
 </resources>

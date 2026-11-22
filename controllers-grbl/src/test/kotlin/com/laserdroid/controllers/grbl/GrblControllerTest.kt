@@ -56,6 +56,12 @@ class GrblControllerTest {
             val transport =
                 FakeSerialTransport()
 
+            /*
+             * connect() sends '?': the test controls the
+             * status stream itself.
+             */
+            transport.respondToStatusQueries = false
+
             val controller =
                 GrblController(transport)
 

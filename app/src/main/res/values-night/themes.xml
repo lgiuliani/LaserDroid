@@ -1,7 +1,12 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.LaserDroid" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your dark theme here. -->
-        <!-- <item name="colorPrimary">@color/my_dark_primary</item> -->
+    <!-- Dark theme in both modes: workshop use, laser glare. -->
+    <style name="Base.Theme.LaserDroid" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/ld_accent</item>
+        <item name="colorAccent">@color/ld_accent</item>
+        <item name="android:windowBackground">@color/ld_background</item>
+        <item name="android:statusBarColor">@color/ld_bar</item>
+        <item name="android:navigationBarColor">@color/ld_bar</item>
+        <item name="android:textColorPrimary">@color/ld_text</item>
+        <item name="android:textColorSecondary">@color/ld_text_secondary</item>
     </style>
 </resources>

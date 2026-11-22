@@ -16,15 +16,24 @@
     <uses-permission
         android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Keeps the CPU running during a job, screen off. -->
+    <uses-permission
+        android:name="android.permission.WAKE_LOCK" />
+
     <application
         android:allowBackup="true"
         android:label="LaserDroid"
         android:supportsRtl="true"
         android:theme="@style/Theme.LaserDroid">
 
+        <!--
+            singleTop: USB_DEVICE_ATTACHED is delivered to the
+            running Activity (onNewIntent) instead of a new one.
+        -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
 
             <intent-filter>
 
@@ -36,6 +45,22 @@
 
             </intent-filter>
 
+            <!--
+                Plugging a known USB serial adapter offers to open
+                LaserDroid. With "use by default", Android keeps
+                the USB permission for this device.
+            -->
+            <intent-filter>
+
+                <action
+                    android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+
+            </intent-filter>
+
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/device_filter" />
+
         </activity>
 
         <service
@@ -45,4 +70,4 @@
 
     </application>
 
-</manifest>
+</manifest>

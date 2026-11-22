@@ -15,6 +15,7 @@
             <option value="$PROJECT_DIR$/controllers-api" />
             <option value="$PROJECT_DIR$/controllers-grbl" />
             <option value="$PROJECT_DIR$/core-gcode" />
+            <option value="$PROJECT_DIR$/core-jobs" />
             <option value="$PROJECT_DIR$/core-machine" />
             <option value="$PROJECT_DIR$/core-streaming" />
             <option value="$PROJECT_DIR$/simulator" />

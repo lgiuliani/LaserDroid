@@ -46,6 +46,11 @@ class FakeSerialTransport : SerialTransport {
             "Serial transport is not connected"
         }
 
+        if (isRealtimeCommand(data)) {
+            handleRealtimeCommand(data)
+            return
+        }
+
         val command = data
             .decodeToString()
             .trimEnd('\r', '\n')
@@ -81,6 +86,66 @@ class FakeSerialTransport : SerialTransport {
         )
     }
 
+    /**
+     * When true, the realtime status query '?' is answered with
+     * [statusReport]. Disable it when a test must fully control
+     * the incoming status stream.
+     */
+    var respondToStatusQueries: Boolean = true
+
+    /**
+     * Status report returned to '?' when
+     * [respondToStatusQueries] is enabled.
+     */
+    var statusReport: String =
+        "<Idle|MPos:0.000,0.000,0.000|FS:0,0>"
+
+    private val _realtimeCommands =
+        mutableListOf<Byte>()
+
+    /**
+     * Realtime bytes received ('?', '!', '~', 0x18, 0x85...).
+     * They are never counted as line commands.
+     */
+    val realtimeCommands: List<Byte>
+        get() = synchronized(_realtimeCommands) {
+            _realtimeCommands.toList()
+        }
+
+    private fun isRealtimeCommand(
+        data: ByteArray
+    ): Boolean {
+
+        if (data.size != 1) {
+            return false
+        }
+
+        val value = data[0].toInt() and 0xFF
+
+        return value == '?'.code ||
+                value == '!'.code ||
+                value == '~'.code ||
+                value == 0x18 ||
+                value >= 0x80
+    }
+
+    private suspend fun handleRealtimeCommand(
+        data: ByteArray
+    ) {
+        synchronized(_realtimeCommands) {
+            _realtimeCommands.add(data[0])
+        }
+
+        if (
+            data[0] == '?'.code.toByte() &&
+            respondToStatusQueries
+        ) {
+            _incomingData.emit(
+                "$statusReport\r\n".encodeToByteArray()
+            )
+        }
+    }
+
     suspend fun emitIncomingData(data: ByteArray) {
         check(
             connectionState.value ==
@@ -97,4 +162,4 @@ class FakeSerialTransport : SerialTransport {
             text.encodeToByteArray()
         )
     }
-}
+}

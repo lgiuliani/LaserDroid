@@ -77,6 +77,10 @@ class GrblParser {
         var feedRate: Int? = null
         var spindleSpeed: Int? = null
 
+        var workCoordinates: List<Double?>? = null
+        var offsetCoordinates: List<Double?>? = null
+        var bufferValues: List<Int?>? = null
+
         fields.drop(1).forEach { field ->
 
             when {
@@ -92,6 +96,30 @@ class GrblParser {
                     z = coordinates.getOrNull(2)?.toDoubleOrNull()
                 }
 
+                field.startsWith("WPos:") -> {
+                    workCoordinates =
+                        parseCoordinates(field.substringAfter("WPos:"))
+                }
+
+                field.startsWith("WCO:") -> {
+                    offsetCoordinates =
+                        parseCoordinates(field.substringAfter("WCO:"))
+                }
+
+                field.startsWith("Bf:") -> {
+                    bufferValues = field
+                        .substringAfter("Bf:")
+                        .split(",")
+                        .map { it.trim().toIntOrNull() }
+                }
+
+                field.startsWith("F:") -> {
+                    feedRate = field
+                        .substringAfter("F:")
+                        .toDoubleOrNull()
+                        ?.toInt()
+                }
+
                 field.startsWith("FS:") -> {
 
                     val values = field
@@ -99,10 +127,10 @@ class GrblParser {
                         .split(",")
 
                     feedRate =
-                        values.getOrNull(0)?.toIntOrNull()
+                        values.getOrNull(0)?.toDoubleOrNull()?.toInt()
 
                     spindleSpeed =
-                        values.getOrNull(1)?.toIntOrNull()
+                        values.getOrNull(1)?.toDoubleOrNull()?.toInt()
                 }
             }
         }
@@ -113,7 +141,23 @@ class GrblParser {
             machineY = y,
             machineZ = z,
             feedRate = feedRate,
-            spindleSpeed = spindleSpeed
+            spindleSpeed = spindleSpeed,
+            workX = workCoordinates?.getOrNull(0),
+            workY = workCoordinates?.getOrNull(1),
+            workZ = workCoordinates?.getOrNull(2),
+            offsetX = offsetCoordinates?.getOrNull(0),
+            offsetY = offsetCoordinates?.getOrNull(1),
+            offsetZ = offsetCoordinates?.getOrNull(2),
+            plannerBlocksFree = bufferValues?.getOrNull(0),
+            serialBytesFree = bufferValues?.getOrNull(1)
         )
     }
-}
+
+    private fun parseCoordinates(
+        value: String
+    ): List<Double?> {
+        return value
+            .split(",")
+            .map { it.trim().toDoubleOrNull() }
+    }
+}
