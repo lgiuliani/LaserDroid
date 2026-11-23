@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import com.laserdroid.controllers.api.ControllerEvent
 
@@ -29,7 +30,26 @@ class MachineManager(
     companion object {
         private const val CONSOLE_TIMEOUT_MILLIS = 5_000L
         private const val HOMING_TIMEOUT_MILLIS = 120_000L
+
+        /*
+         * Status refresh outside jobs: keeps the displayed state
+         * right after resets, unlocks, console commands...
+         */
+        private const val BACKGROUND_POLL_MILLIS = 500L
+
+        /* $30 default (Sculpfun S10). */
+        private const val DEFAULT_MAX_POWER = 1_000.0
     }
+
+    private var backgroundPollJob: kotlinx.coroutines.Job? = null
+
+    private val _framingActive =
+        MutableStateFlow(false)
+
+    /** True while the job frame is being traced. */
+    val framingActive:
+            StateFlow<Boolean> =
+        _framingActive.asStateFlow()
 
     val controllerEvents:
             Flow<ControllerEvent>
@@ -214,6 +234,8 @@ class MachineManager(
 
             controller.requestStatus()
 
+            startBackgroundPolling()
+
             _events.emit(
                 MachineEvent.Connected
             )
@@ -355,6 +377,171 @@ class MachineManager(
         controller.requestStatus()
 
         return result
+    }
+
+    /*
+     * ----------------------------------------------------
+     * BACKGROUND STATUS
+     * ----------------------------------------------------
+     */
+
+    private fun startBackgroundPolling() {
+
+        backgroundPollJob?.cancel()
+
+        backgroundPollJob =
+            scope.launch {
+                while (isActive) {
+                    delay(BACKGROUND_POLL_MILLIS)
+                    // Jobs and framing poll by themselves.
+                    if (!snapshot.value.jobActive) {
+                        try {
+                            controller.requestStatus()
+                        } catch (exception: kotlinx.coroutines.CancellationException) {
+                            throw exception
+                        } catch (exception: Exception) {
+                            // Link lost: reported elsewhere.
+                        }
+                    }
+                }
+            }
+    }
+
+    /*
+     * ----------------------------------------------------
+     * WORKSHOP FUNCTIONS
+     * ----------------------------------------------------
+     */
+
+    /** $30: S value for 100% laser power. */
+    val maxLaserPower: Double
+        get() = settings.value[30]
+            ?.toDoubleOrNull()
+            ?.takeIf { it > 0.0 }
+            ?: DEFAULT_MAX_POWER
+
+    /**
+     * Current position becomes the work origin X0 Y0
+     * (G10 L20 P1, stored by GRBL).
+     */
+    suspend fun setWorkZero(): CommandResult {
+
+        if (!snapshot.value.canJog) {
+            return CommandResult.Rejected(code = null)
+        }
+
+        val result =
+            controller.executeCommand(
+                "G10 L20 P1 X0 Y0"
+            )
+
+        controller.requestStatus()
+
+        return result
+    }
+
+    /**
+     * Laser on at [powerPercent] of $30, machine stopped (M3).
+     * Only when Idle and no job.
+     */
+    suspend fun laserPointerOn(
+        powerPercent: Double
+    ): CommandResult {
+
+        if (!snapshot.value.canJog) {
+            return CommandResult.Rejected(code = null)
+        }
+
+        val power =
+            maxLaserPower * powerPercent.coerceIn(0.0, 100.0) / 100.0
+
+        return controller.executeCommand(
+            "M3 S" + formatValue(power)
+        )
+    }
+
+    /** Laser off (M5). Not sent during a job. */
+    suspend fun laserPointerOff(): CommandResult {
+
+        if (isJobActive && !_framingActive.value) {
+            return CommandResult.Rejected(code = null)
+        }
+
+        return controller.executeCommand(
+            "M5 S0"
+        )
+    }
+
+    /**
+     * Executes a short program (job frame) with exclusive control
+     * of the machine, then waits until the machine is Idle.
+     */
+    suspend fun runFraming(
+        commands: List<String>,
+        pathLengthMillimeters: Double,
+        feedRate: Double
+    ): MachineOperationResult {
+
+        if (!beginJob()) {
+            return MachineOperationResult.Interrupted(
+                snapshot.value.machineState
+            )
+        }
+
+        _framingActive.value = true
+
+        return try {
+
+            for (command in commands) {
+
+                val result =
+                    controller.executeCommand(
+                        command,
+                        CONSOLE_TIMEOUT_MILLIS
+                    )
+
+                if (result != CommandResult.Acknowledged) {
+                    runCatching { controller.stop() }
+                    return MachineOperationResult.CommandRejected(result)
+                }
+            }
+
+            monitorUntilIdle(
+                timeoutMillis =
+                    calculateMotionTimeout(
+                        distanceMillimeters = pathLengthMillimeters,
+                        feedRate = feedRate
+                    ) + 5_000L,
+                allowRunning = true
+            )
+
+        } finally {
+
+            _framingActive.value = false
+            endJob()
+        }
+    }
+
+    /**
+     * Stops the framing: feed hold, then soft reset (laser off).
+     */
+    suspend fun stopFraming() {
+
+        if (!_framingActive.value) {
+            return
+        }
+
+        controller.pause()
+        delay(300L)
+        controller.stop()
+    }
+
+    private fun formatValue(value: Double): String {
+        return java.math.BigDecimal
+            .valueOf(value)
+            .setScale(3, java.math.RoundingMode.HALF_UP)
+            .stripTrailingZeros()
+            .toPlainString()
     }
 
     /**
@@ -595,7 +782,8 @@ class MachineManager(
     }
 
     private suspend fun monitorUntilIdle(
-        timeoutMillis: Long
+        timeoutMillis: Long,
+        allowRunning: Boolean = false
     ): MachineOperationResult {
 
         val startTime =
@@ -635,6 +823,15 @@ class MachineManager(
                         .Completed(
                             currentSnapshot.position
                         )
+                }
+
+                MachineState.Running -> {
+                    if (!allowRunning) {
+                        return MachineOperationResult
+                            .Interrupted(
+                                currentSnapshot.machineState
+                            )
+                    }
                 }
 
                 MachineState.Jog -> {
@@ -750,6 +947,8 @@ class MachineManager(
     }
 
     fun close() {
+
+        backgroundPollJob?.cancel()
 
         scope.cancel()
     }

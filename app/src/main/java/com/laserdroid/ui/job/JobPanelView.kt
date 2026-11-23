@@ -33,6 +33,7 @@ class JobPanelView @JvmOverloads constructor(
     var onPauseRequested: (() -> Unit)? = null
     var onResumeRequested: (() -> Unit)? = null
     var onStopRequested: (() -> Unit)? = null
+    var onFrameRequested: (() -> Unit)? = null
 
     private val preview: GCodePreviewView
     private val infoText: TextView
@@ -40,7 +41,8 @@ class JobPanelView @JvmOverloads constructor(
     private val progressBar: ProgressBar
     private val laserOffCheck: CompoundButton
     private val openButton: View
-    private val startButton: View
+    private val startButton: TextView
+    private val frameButton: View
     private val pauseButton: View
     private val resumeButton: View
     private val stopButton: View
@@ -50,6 +52,7 @@ class JobPanelView @JvmOverloads constructor(
     private var machineState: MachineState = MachineState.Disconnected
     private var machineTravelX: Double? = null
     private var machineTravelY: Double? = null
+    private var framingActive = false
 
     init {
         LayoutInflater.from(context).inflate(R.layout.view_job_panel, this, true)
@@ -61,11 +64,13 @@ class JobPanelView @JvmOverloads constructor(
         laserOffCheck = findViewById(R.id.checkJobLaserOff)
         openButton = findViewById(R.id.buttonJobOpen)
         startButton = findViewById(R.id.buttonJobStart)
+        frameButton = findViewById(R.id.buttonJobFrame)
         pauseButton = findViewById(R.id.buttonJobPause)
         resumeButton = findViewById(R.id.buttonJobResume)
         stopButton = findViewById(R.id.buttonJobStop)
 
         openButton.setOnClickListener { onOpenRequested?.invoke() }
+        frameButton.setOnClickListener { onFrameRequested?.invoke() }
         startButton.setOnClickListener {
             onStartRequested?.invoke(laserOffCheck.isChecked)
         }
@@ -109,6 +114,12 @@ class JobPanelView @JvmOverloads constructor(
         updateButtons()
     }
 
+    /** Frame tracing in progress: STOP stays available. */
+    fun setFramingActive(active: Boolean) {
+        framingActive = active
+        updateButtons()
+    }
+
     fun updateMachineState(state: MachineState) {
         machineState = state
         updateButtons()
@@ -125,14 +136,21 @@ class JobPanelView @JvmOverloads constructor(
                 machineState != MachineState.Connecting &&
                 machineState !is MachineState.Error
 
-        openButton.isEnabled = !state.isActive && state != JobState.LOADING
+        val idle = machineState == MachineState.Idle && !framingActive
+
+        openButton.isEnabled = !state.isActive && state != JobState.LOADING && !framingActive
         startButton.isEnabled = connected &&
                 state.canStart &&
                 jobSnapshot.analysis != null &&
-                machineState == MachineState.Idle
+                idle
+        startButton.text = if (jobSnapshot.isRecoverable) "RECOVER" else "START"
+        frameButton.isEnabled = connected &&
+                idle &&
+                !state.isActive &&
+                jobSnapshot.analysis != null
         pauseButton.isEnabled = connected && state.canPause
         resumeButton.isEnabled = connected && state.canResume
-        stopButton.isEnabled = connected && state.isActive
+        stopButton.isEnabled = connected && (state.isActive || framingActive)
         laserOffCheck.isEnabled = !state.isActive
     }
 

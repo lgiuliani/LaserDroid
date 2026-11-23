@@ -410,6 +410,11 @@ class GrblController(
 
             is GrblResponse.Unknown -> {
 
+                if (isStartupBanner(response.raw)) {
+                    handleControllerReset(response.raw)
+                    return
+                }
+
                 _events.emit(
                     ControllerEvent.MessageReceived(
                         response.raw
@@ -425,6 +430,33 @@ class GrblController(
                     )
                 )
             }
+        }
+    }
+
+    /*
+     * "Grbl 1.1h ['$' for help]" is printed at every startup
+     * (power-on, USB DTR reset, Ctrl-X).
+     */
+    private fun isStartupBanner(line: String): Boolean {
+        return line.startsWith("Grbl ") && line.contains("help")
+    }
+
+    /*
+     * GRBL flushed its serial and planner buffers: a command
+     * waiting for "ok" will never be acknowledged.
+     */
+    private suspend fun handleControllerReset(banner: String) {
+
+        pendingCommand?.complete(
+            CommandResult.Reset
+        )
+
+        _events.emit(
+            ControllerEvent.ResetDetected(banner)
+        )
+
+        runCatching {
+            requestStatus()
         }
     }
 

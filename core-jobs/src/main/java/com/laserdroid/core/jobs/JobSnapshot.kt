@@ -29,6 +29,16 @@ data class JobSnapshot(
     val errorCommand: String? = null
 ) {
 
+    /**
+     * Interrupted by a disconnection after at least one line:
+     * the user must choose Resume, Restart or Cancel.
+     */
+    val isRecoverable: Boolean
+        get() = state == JobState.DISCONNECTED &&
+                currentLine != null &&
+                commandsSent > 0 &&
+                analysis != null
+
     /** Acknowledged commands, 0..100. */
     val percent: Double
         get() = if (totalCommands <= 0) {
@@ -67,6 +77,43 @@ data class JobSnapshot(
     companion object {
         val EMPTY = JobSnapshot(state = JobState.EMPTY)
     }
+}
+
+/**
+ * How to continue a job interrupted by a disconnection.
+ */
+enum class RecoveryMode {
+    /** Continue after the last line sent before the interruption. */
+    RESUME,
+
+    /** Run the whole program again from its first line. */
+    RESTART
+}
+
+/**
+ * Situation of an interrupted job, evaluated after reconnection.
+ *
+ * GRBL keeps executing its buffer when the USB link is lost: every
+ * line sent before the interruption is considered executed.
+ * If GRBL was then reset, its position is lost; the head is assumed
+ * to be at the end of the last executed line ([expectedX],
+ * [expectedY]) and the work origin is redefined with G10 L20.
+ */
+data class RecoveryAssessment(
+    val lineNumber: Long,
+    val commandsDone: Int,
+    val totalCommands: Int,
+    val expectedX: Double?,
+    val expectedY: Double?,
+    val currentX: Double?,
+    val currentY: Double?,
+    /** Reported position matches the expected one. */
+    val positionTrusted: Boolean,
+    /** G10/G28/G30/G92 in the program: the expected point may be wrong. */
+    val positionUncertain: Boolean
+) {
+    val canResynchronize: Boolean
+        get() = expectedX != null && expectedY != null
 }
 
 /**

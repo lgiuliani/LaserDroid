@@ -2,8 +2,11 @@ package com.laserdroid.ui.jog
 
 import android.content.Context
 import android.util.AttributeSet
+import android.annotation.SuppressLint
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
+import android.widget.TextView
 import android.widget.FrameLayout
 import com.laserdroid.R
 import com.laserdroid.controllers.api.MachinePosition
@@ -59,10 +62,21 @@ class JogPanelView @JvmOverloads constructor(
     /** STOP JOG button. */
     var onCancelRequested: () -> Unit = { }
 
+    /** SET ZERO: current position becomes the work origin. */
+    var onSetZeroRequested: () -> Unit = { }
+
+    /** LASER button: true when pressed, false when released. */
+    var onLaserPointer: (on: Boolean) -> Unit = { }
+
     private val dial: JogDialView
     private val stepChips: ChoiceChipsView
     private val speedChips: ChoiceChipsView
     private val cancelButton: View
+    private val setZeroButton: View
+    private val laserButton: TextView
+
+    /* LASER currently held: must be switched off on any exit. */
+    private var laserActive = false
 
     init {
         LayoutInflater.from(context).inflate(R.layout.view_jog_panel, this, true)
@@ -71,6 +85,8 @@ class JogPanelView @JvmOverloads constructor(
         stepChips = findViewById(R.id.chipsJogStep)
         speedChips = findViewById(R.id.chipsJogSpeed)
         cancelButton = findViewById(R.id.buttonJogCancel)
+        setZeroButton = findViewById(R.id.buttonSetZero)
+        laserButton = findViewById(R.id.buttonLaserPointer)
 
         stepChips.setChoices(STEP_VALUES, DEFAULT_STEP) { formatNumber(it) }
         speedChips.setChoices(SPEED_VALUES, DEFAULT_SPEED) { formatSpeed(it) }
@@ -85,8 +101,50 @@ class JogPanelView @JvmOverloads constructor(
         dial.onCenterClick = { onHomeRequested(getSelectedSpeed()) }
 
         cancelButton.setOnClickListener { onCancelRequested() }
+        setZeroButton.setOnClickListener { onSetZeroRequested() }
+        configureLaserButton()
 
         updateMachineState(MachineState.Disconnected)
+    }
+
+    /*
+     * Hold-to-fire: laser on while the finger is on the button.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun configureLaserButton() {
+        laserButton.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    view.isPressed = true
+                    laserActive = true
+                    onLaserPointer(true)
+                }
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL -> {
+                    view.isPressed = false
+                    releaseLaser()
+                }
+            }
+            true
+        }
+    }
+
+    /** Switches the LASER button off if it is held. */
+    fun releaseLaser() {
+        if (laserActive) {
+            laserActive = false
+            laserButton.isPressed = false
+            onLaserPointer(false)
+        }
+    }
+
+    fun setLaserPointerPercent(percent: Double) {
+        laserButton.text = "LASER ${formatNumber(percent)}%"
+    }
+
+    override fun onDetachedFromWindow() {
+        releaseLaser()
+        super.onDetachedFromWindow()
     }
 
     fun getSelectedSpeed(): Double = speedChips.selectedValue
@@ -116,6 +174,11 @@ class JogPanelView @JvmOverloads constructor(
                     state !is MachineState.Error
 
         dial.isEnabled = jogEnabled
+        setZeroButton.isEnabled = jogEnabled
+        laserButton.isEnabled = state == MachineState.Idle || laserActive
+        if (!connected) {
+            releaseLaser()
+        }
         stepChips.isEnabled = connected
         speedChips.isEnabled = connected
         cancelButton.isEnabled = connected

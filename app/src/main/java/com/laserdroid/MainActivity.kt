@@ -17,6 +17,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.widget.CompoundButton
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.ScrollView
@@ -33,15 +34,24 @@ import com.laserdroid.controllers.api.MachineState
 import com.laserdroid.core.jobs.JobSnapshot
 import com.laserdroid.core.jobs.JobStartResult
 import com.laserdroid.core.jobs.JobState
+import com.laserdroid.core.jobs.RecoveryAssessment
+import com.laserdroid.core.jobs.RecoveryMode
 import com.laserdroid.core.machine.MachineEvent
 import com.laserdroid.core.machine.MachineManager
 import com.laserdroid.core.machine.MachineOperationResult
 import com.laserdroid.core.machine.MachineSnapshot
+import com.laserdroid.service.AppSettings
+import com.laserdroid.service.JobHistoryEntry
+import com.laserdroid.service.LogLevel
 import com.laserdroid.service.MachineService
 import com.laserdroid.service.MachineServiceConnection
+import com.laserdroid.ui.common.ChoiceChipsView
 import com.laserdroid.ui.job.JobPanelView
 import com.laserdroid.ui.jog.JogDirection
 import com.laserdroid.ui.jog.JogPanelView
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
@@ -68,7 +78,6 @@ class MainActivity : Activity() {
 
         private const val CONTINUOUS_JOG_INTERVAL_MS = 150L
 
-        private const val SAVED_LOG = "laserdroid.saved.log"
         private const val SAVED_JOG_SPEED = "laserdroid.saved.jog.speed"
         private const val SAVED_JOG_STEP = "laserdroid.saved.jog.step"
         private const val SAVED_PAGE = "laserdroid.saved.page"
@@ -83,6 +92,12 @@ class MainActivity : Activity() {
         private const val PAGE_JOG = 0
         private const val PAGE_JOB = 1
         private const val PAGE_CONSOLE = 2
+        private const val PAGE_SETTINGS = 3
+
+        private val FRAMING_POWER_VALUES = listOf(0.0, 1.0, 2.0, 5.0)
+        private val FRAMING_FEED_VALUES = listOf(1_000.0, 2_000.0, 3_000.0, 6_000.0)
+        private val POINTER_POWER_VALUES = listOf(1.0, 2.0, 5.0, 10.0)
+        private val LOG_LEVEL_VALUES = listOf(1.0, 2.0, 3.0, 4.0, 5.0)
 
         /*
          * Sculpfun S10: CH340, VID 0x1A86 (6790) / PID 0x7523 (29987).
@@ -102,6 +117,13 @@ class MainActivity : Activity() {
     private lateinit var jogPanel: JogPanelView
     private lateinit var jobPanelView: JobPanelView
     private lateinit var consolePanel: View
+    private lateinit var settingsPanel: View
+    private lateinit var framingPowerChips: ChoiceChipsView
+    private lateinit var framingFeedChips: ChoiceChipsView
+    private lateinit var pointerPowerChips: ChoiceChipsView
+    private lateinit var logLevelChips: ChoiceChipsView
+    private lateinit var soundsSwitch: CompoundButton
+    private lateinit var aboutText: TextView
     private lateinit var logText: TextView
     private lateinit var logScrollView: ScrollView
     private lateinit var commandInput: EditText
@@ -116,7 +138,6 @@ class MainActivity : Activity() {
 
     private var currentPage = PAGE_JOG
     private var lastMachineSnapshot: MachineSnapshot = MachineSnapshot.initial()
-    private var lastJobState: JobState? = null
 
     /* Coroutines bound to the Activity */
     private var serviceObserverJob: Job? = null
@@ -126,6 +147,12 @@ class MainActivity : Activity() {
     private var controllerEventsJob: Job? = null
     private var managerSettingsJob: Job? = null
     private var continuousJogJob: Job? = null
+    private var logJob: Job? = null
+    private var settingsJob: Job? = null
+    private var framingStateJob: Job? = null
+
+    /* Suppresses listeners while settings are displayed. */
+    private var displayingSettings = false
 
     /*
      * ----------------------------------------------------
@@ -187,6 +214,7 @@ class MainActivity : Activity() {
         configureConsole()
         configureJogPanel()
         configureJobPanel()
+        configureSettings()
 
         restoreUiState(savedInstanceState)
 
@@ -201,6 +229,12 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleUsbIntent(intent)
+    }
+
+    override fun onPause() {
+        // Safety: the LASER button never stays on in background.
+        jogPanel.releaseLaser()
+        super.onPause()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -236,13 +270,21 @@ class MainActivity : Activity() {
         jogPanel = findViewById(R.id.jogPanel)
         jobPanelView = findViewById(R.id.jobPanelView)
         consolePanel = findViewById(R.id.consolePanel)
+        settingsPanel = findViewById(R.id.settingsPanel)
+        framingPowerChips = findViewById(R.id.chipsFramingPower)
+        framingFeedChips = findViewById(R.id.chipsFramingFeed)
+        pointerPowerChips = findViewById(R.id.chipsPointerPower)
+        logLevelChips = findViewById(R.id.chipsLogLevel)
+        soundsSwitch = findViewById(R.id.switchSounds)
+        aboutText = findViewById(R.id.textAbout)
         logText = findViewById(R.id.textLog)
         logScrollView = findViewById(R.id.logScrollView)
         commandInput = findViewById(R.id.editCommand)
         tabs = listOf(
             findViewById(R.id.tabJog),
             findViewById(R.id.tabJob),
-            findViewById(R.id.tabConsole)
+            findViewById(R.id.tabConsole),
+            findViewById(R.id.tabSettings)
         )
     }
 
@@ -279,7 +321,11 @@ class MainActivity : Activity() {
         jogPanel.visibility = if (page == PAGE_JOG) View.VISIBLE else View.GONE
         jobPanelView.visibility = if (page == PAGE_JOB) View.VISIBLE else View.GONE
         consolePanel.visibility = if (page == PAGE_CONSOLE) View.VISIBLE else View.GONE
+        settingsPanel.visibility = if (page == PAGE_SETTINGS) View.VISIBLE else View.GONE
         lastMessageText.visibility = if (page == PAGE_CONSOLE) View.GONE else View.VISIBLE
+        if (page != PAGE_JOG) {
+            jogPanel.releaseLaser()
+        }
         tabs.forEachIndexed { index, tab -> tab.isSelected = index == page }
 
         if (page != PAGE_CONSOLE) {
@@ -350,25 +396,25 @@ class MainActivity : Activity() {
             ColorStateList.valueOf(ContextCompat.getColor(this, connectColor))
 
         val offline = state == MachineState.Disconnected || state == MachineState.Connecting
+        val offset = machineService?.workCoordinateOffset ?: MachinePosition.ZERO
+        /* Work coordinates (origin set with SET ZERO). */
         positionText.text = if (offline) {
             "X  ---.---  Y  ---.---"
         } else {
             String.format(
                 Locale.US,
                 "X %8.3f  Y %8.3f",
-                snapshot.position.x,
-                snapshot.position.y
+                snapshot.position.x - offset.x,
+                snapshot.position.y - offset.y
             )
         }
 
         jogPanel.updateMachineState(state)
         jobPanelView.updateMachineState(state)
 
-        val service = machineService
-        if (offline || service == null) {
+        if (offline) {
             jobPanelView.updateHeadPosition(null)
         } else {
-            val offset = service.workCoordinateOffset
             jobPanelView.updateHeadPosition(
                 MachinePosition(
                     x = snapshot.position.x - offset.x,
@@ -420,6 +466,8 @@ class MainActivity : Activity() {
             }
 
         observeJob(service)
+        observeServiceLog(service)
+        observeSettings(service)
 
         /*
          * After a rotation the backend already exists:
@@ -446,43 +494,11 @@ class MainActivity : Activity() {
                 }
             }
 
-        managerEventsJob =
+        framingStateJob?.cancel()
+        framingStateJob =
             activityScope.launch {
-                manager.events.collect { event ->
-                    when (event) {
-                        MachineEvent.Connected -> appendLog("Machine connected.")
-                        MachineEvent.Disconnected -> appendLog("Machine disconnected.")
-                        is MachineEvent.JogStarted -> appendLog(event.description)
-                        /* Position is shown by the status bar. */
-                        is MachineEvent.PositionUpdated -> Unit
-                        is MachineEvent.JogCompleted -> appendLog(
-                            "Jog completed: X=${formatCoordinate(event.position.x)}, " +
-                                    "Y=${formatCoordinate(event.position.y)}"
-                        )
-                        MachineEvent.JogCancelled -> appendLog("Jog cancelled.")
-                        is MachineEvent.Error -> appendLog("Machine error: ${event.message}")
-                    }
-                }
-            }
-
-        /*
-         * Detailed GRBL output: $0=10, [VER:...], error:..., ALARM:...
-         */
-        controllerEventsJob =
-            activityScope.launch {
-                manager.controllerEvents.collect { event ->
-                    when (event) {
-                        is ControllerEvent.SettingReceived ->
-                            appendLog("\$${event.number}=${event.value}")
-                        is ControllerEvent.MessageReceived ->
-                            appendLog(event.message)
-                        is ControllerEvent.ErrorReceived ->
-                            appendLog("GRBL ERROR: ${event.code} ${event.message}")
-                        is ControllerEvent.AlarmReceived ->
-                            appendLog("GRBL ALARM: ${event.code} ${event.message}")
-                        ControllerEvent.Connected,
-                        ControllerEvent.Disconnected -> Unit
-                    }
+                manager.framingActive.collect { active ->
+                    jobPanelView.setFramingActive(active)
                 }
             }
     }
@@ -500,6 +516,12 @@ class MainActivity : Activity() {
         jobObserverJob = null
         jobTickerJob?.cancel()
         jobTickerJob = null
+        logJob?.cancel()
+        logJob = null
+        settingsJob?.cancel()
+        settingsJob = null
+        framingStateJob?.cancel()
+        framingStateJob = null
     }
 
     private fun requireMachineManager(): MachineManager? {
@@ -651,15 +673,15 @@ class MainActivity : Activity() {
 
             service.connect(device)
                 .onSuccess {
-                    appendLog("Machine backend connected.")
                     service.manager?.let { observeMachineManager(it) }
+                    if (service.jobSnapshot.value.isRecoverable) {
+                        // Let the first status reports arrive (position, WCO).
+                        delay(1_500.milliseconds)
+                        showPage(PAGE_JOB)
+                        showRecoveryDialog()
+                    }
                 }
-                .onFailure { exception ->
-                    appendLog(
-                        "Connection failed: " +
-                                (exception.message ?: exception.javaClass.simpleName)
-                    )
-                }
+                .onFailure { /* Logged by the service. */ }
         }
     }
 
@@ -681,7 +703,6 @@ class MainActivity : Activity() {
             .setPositiveButton("Disconnect") { _, _ ->
                 activityScope.launch {
                     service.disconnect()
-                    appendLog("Disconnected.")
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -793,6 +814,23 @@ class MainActivity : Activity() {
         /* Center button: X0 Y0 at the selected speed, step ignored. */
         jogPanel.onHomeRequested = { speed -> executeJogHome(speed) }
         jogPanel.onCancelRequested = { cancelJog() }
+        jogPanel.onSetZeroRequested = { confirmSetZero() }
+        jogPanel.onLaserPointer = { on -> machineService?.laserPointer(on) }
+    }
+
+    private fun confirmSetZero() {
+        val service = machineService ?: return
+        AlertDialog.Builder(this)
+            .setTitle("Set work zero")
+            .setMessage(
+                "The current head position becomes the work origin X0 Y0 " +
+                        "(G10 L20 P1, stored by GRBL)."
+            )
+            .setPositiveButton("Set zero") { _, _ ->
+                activityScope.launch { service.setWorkZero() }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun createJogRequest(
@@ -901,9 +939,14 @@ class MainActivity : Activity() {
      */
 
     private fun configureJobPanel() {
-        jobPanelView.onOpenRequested = { openGCodeFile() }
+        jobPanelView.onOpenRequested = { showOpenDialog() }
+        jobPanelView.onFrameRequested = { startFraming() }
         jobPanelView.onStartRequested = { laserOff ->
-            if (laserOff) startJob(laserOff = true) else confirmLaserOnStart()
+            when {
+                machineService?.jobSnapshot?.value?.isRecoverable == true -> showRecoveryDialog()
+                laserOff -> startJob(laserOff = true)
+                else -> confirmLaserOn { startJob(laserOff = false) }
+            }
         }
         jobPanelView.onPauseRequested = {
             runJobCommand("Pause") { it.jobManager.pause() }
@@ -912,7 +955,12 @@ class MainActivity : Activity() {
             runJobCommand("Resume") { it.jobManager.resume() }
         }
         jobPanelView.onStopRequested = {
-            runJobCommand("Stop") { it.jobManager.stop() }
+            val service = machineService
+            if (service != null && service.isFraming) {
+                service.stopFraming()
+            } else {
+                runJobCommand("Stop") { it.jobManager.stop() }
+            }
         }
     }
 
@@ -923,7 +971,6 @@ class MainActivity : Activity() {
             activityScope.launch {
                 service.jobSnapshot.collect { job ->
                     renderJob(job)
-                    logJobTransition(job)
                 }
             }
 
@@ -953,18 +1000,6 @@ class MainActivity : Activity() {
         } else {
             jobBadgeText.visibility = View.GONE
         }
-    }
-
-    private fun logJobTransition(job: JobSnapshot) {
-        if (job.state == lastJobState) return
-        val previous = lastJobState
-        lastJobState = job.state
-
-        /* After a rotation, the first value is not a transition. */
-        if (previous == null) return
-
-        val message = job.message?.takeIf { !job.state.isActive }
-        appendLog("JOB ${job.state.name}" + if (message != null) ": $message" else "")
     }
 
     private fun openGCodeFile() {
@@ -998,22 +1033,12 @@ class MainActivity : Activity() {
         showPage(PAGE_JOB)
 
         activityScope.launch {
-            appendLog("Loading G-code...")
+            // Result and warnings are logged by the service.
             service.importAndLoad(uri)
-                .onSuccess { analysis ->
-                    appendLog(
-                        "Loaded ${analysis.name}: ${analysis.executableCommands} commands, " +
-                                "errors ${analysis.errorCount}, warnings ${analysis.warningCount}"
-                    )
-                    analysis.warnings.take(10).forEach { warning ->
-                        appendLog("  ${warning.severity} L${warning.lineNumber}: ${warning.message}")
-                    }
-                }
-                .onFailure { appendLog("Load failed: ${describe(it)}") }
         }
     }
 
-    private fun confirmLaserOnStart() {
+    private fun confirmLaserOn(onConfirmed: () -> Unit) {
 
         /*
          * $32=0: GRBL is not in laser mode, the laser is not
@@ -1032,7 +1057,7 @@ class MainActivity : Activity() {
                         "Eye protection on, material in place, " +
                         "air assist and fire safety ready?" + warning
             )
-            .setPositiveButton("Start with laser") { _, _ -> startJob(laserOff = false) }
+            .setPositiveButton("Start with laser") { _, _ -> onConfirmed() }
             .setNegativeButton("Cancel", null)
             .show()
     }
@@ -1073,6 +1098,289 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun startFraming() {
+        val service = machineService ?: return
+        val refusal = service.startFraming()
+        if (refusal != null) {
+            appendLog("Framing refused: $refusal")
+        }
+    }
+
+    /*
+     * ----------------------------------------------------
+     * RECOVERY OF AN INTERRUPTED JOB
+     * ----------------------------------------------------
+     */
+
+    private fun showRecoveryDialog() {
+        val service = machineService ?: return
+        activityScope.launch {
+            val assessment = service.jobManager.assessRecovery()
+            if (assessment == null) {
+                appendLog("Connect the machine to recover the interrupted job.")
+                return@launch
+            }
+            val laserOff = jobPanelView.isLaserOffChecked
+
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("Interrupted job")
+                .setMessage(recoveryMessage(assessment, laserOff))
+                .setPositiveButton("Resume") { _, _ ->
+                    recoverJob(RecoveryMode.RESUME, laserOff)
+                }
+                .setNeutralButton("Restart") { _, _ ->
+                    recoverJob(RecoveryMode.RESTART, laserOff)
+                }
+                .setNegativeButton("Cancel job") { _, _ ->
+                    if (service.jobManager.cancelRecovery()) {
+                        appendLog("Interrupted job cancelled.")
+                    }
+                }
+                .show()
+        }
+    }
+
+    private fun recoveryMessage(assessment: RecoveryAssessment, laserOff: Boolean): String {
+        val percent =
+            if (assessment.totalCommands > 0) {
+                assessment.commandsDone * 100.0 / assessment.totalCommands
+            } else {
+                0.0
+            }
+        return buildString {
+            append(
+                String.format(
+                    Locale.US,
+                    "Stopped after line %d (%.1f%%, %d/%d commands).\n\n",
+                    assessment.lineNumber,
+                    percent,
+                    assessment.commandsDone,
+                    assessment.totalCommands
+                )
+            )
+            val expected =
+                if (assessment.canResynchronize) {
+                    String.format(
+                        Locale.US,
+                        "X %.3f Y %.3f",
+                        assessment.expectedX,
+                        assessment.expectedY
+                    )
+                } else {
+                    "unknown"
+                }
+            if (assessment.positionTrusted) {
+                append("Position verified: $expected.\n")
+            } else {
+                append("Position NOT verified: GRBL lost its position (reset).\n")
+                append("The current head position will become $expected ")
+                append("(last executed point) with G10 L20.\n")
+                append("Do not move the head before choosing.\n")
+            }
+            if (assessment.positionUncertain) {
+                append("\nWARNING: the program uses G10/G28/G92: the expected point may be wrong.\n")
+            }
+            append("\nResume: continue after line ${assessment.lineNumber}.")
+            append("\nRestart: run again from the first line, same origin.")
+            append("\nCancel job: keep the program, forget the progress.")
+            append(if (laserOff) "\n\nLaser OFF (dry run)." else "\n\nLASER ON.")
+        }
+    }
+
+    private fun recoverJob(mode: RecoveryMode, laserOff: Boolean) {
+        val service = machineService ?: return
+        val run = {
+            activityScope.launch {
+                when (val result = service.jobManager.recover(mode, laserOff)) {
+                    JobStartResult.Started -> appendLog("Recovery started: $mode.")
+                    is JobStartResult.Rejected -> appendLog("Recovery refused: ${result.reason}")
+                }
+            }
+            Unit
+        }
+        if (laserOff) run() else confirmLaserOn(run)
+    }
+
+    /*
+     * ----------------------------------------------------
+     * LIBRARY AND HISTORY
+     * ----------------------------------------------------
+     */
+
+    private fun showOpenDialog() {
+        val service = machineService
+        if (service == null) {
+            openGCodeFile()
+            return
+        }
+        val files = service.libraryFiles()
+        val labels = arrayOf("Import from phone…") + files.map { describeFile(it) }
+
+        AlertDialog.Builder(this)
+            .setTitle("Open G-code")
+            .setItems(labels) { _, which ->
+                if (which == 0) {
+                    openGCodeFile()
+                } else {
+                    val file = files[which - 1]
+                    activityScope.launch { service.loadLibraryFile(file) }
+                    showPage(PAGE_JOB)
+                }
+            }
+            .setNeutralButton("Delete…") { _, _ -> showDeleteDialog(files) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showDeleteDialog(files: List<File>) {
+        val service = machineService ?: return
+        if (files.isEmpty()) {
+            appendLog("Library is empty.")
+            return
+        }
+        val checked = BooleanArray(files.size)
+        AlertDialog.Builder(this)
+            .setTitle("Delete from library")
+            .setMultiChoiceItems(files.map { it.name }.toTypedArray(), checked) { _, which, isChecked ->
+                checked[which] = isChecked
+            }
+            .setPositiveButton("Delete") { _, _ ->
+                service.deleteLibraryFiles(files.filterIndexed { index, _ -> checked[index] })
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun describeFile(file: File): String {
+        val size = file.length()
+        val sizeText = when {
+            size < 1_024 -> "$size B"
+            size < 1_048_576 -> String.format(Locale.US, "%.1f KB", size / 1_024.0)
+            else -> String.format(Locale.US, "%.1f MB", size / 1_048_576.0)
+        }
+        val date = SimpleDateFormat("dd/MM HH:mm", Locale.US).format(Date(file.lastModified()))
+        return "${file.name}\n   $sizeText · $date"
+    }
+
+    private fun showHistoryDialog() {
+        val service = machineService ?: return
+        activityScope.launch {
+            val entries = service.loadHistory()
+            val labels =
+                if (entries.isEmpty()) arrayOf("No job yet.")
+                else entries.map { describeHistory(it) }.toTypedArray()
+
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("Job history")
+                .setItems(labels, null)
+                .setNeutralButton("Clear") { _, _ ->
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Clear history?")
+                        .setPositiveButton("Clear") { _, _ ->
+                            activityScope.launch { service.clearHistory() }
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+                .setNegativeButton("Close", null)
+                .show()
+        }
+    }
+
+    private fun describeHistory(entry: JobHistoryEntry): String {
+        val date = SimpleDateFormat("dd/MM HH:mm", Locale.US).format(Date(entry.startedAt))
+        val duration = formatDuration(entry.endedAt - entry.startedAt)
+        val size =
+            if (entry.width != null && entry.height != null) {
+                String.format(Locale.US, " · %.0f×%.0f mm", entry.width, entry.height)
+            } else {
+                ""
+            }
+        val laser = if (entry.laserOff) " · laser off" else ""
+        return "$date  ${entry.name}\n   " +
+                String.format(Locale.US, "%s %.0f%% · %s", entry.state, entry.percent, duration) +
+                size + laser
+    }
+
+    private fun formatDuration(millis: Long): String {
+        val seconds = (millis / 1_000L).coerceAtLeast(0L)
+        return if (seconds >= 3_600L) {
+            String.format(Locale.US, "%d:%02d:%02d", seconds / 3_600L, (seconds % 3_600L) / 60L, seconds % 60L)
+        } else {
+            String.format(Locale.US, "%02d:%02d", seconds / 60L, seconds % 60L)
+        }
+    }
+
+    /*
+     * ----------------------------------------------------
+     * SETTINGS
+     * ----------------------------------------------------
+     */
+
+    private fun configureSettings() {
+        val percentLabel: (Double) -> String = { value ->
+            if (value == 0.0) "OFF" else formatNumber(value) + "%"
+        }
+        framingPowerChips.setChoices(FRAMING_POWER_VALUES, 2.0, percentLabel)
+        framingFeedChips.setChoices(FRAMING_FEED_VALUES, 3_000.0) { formatNumber(it) }
+        pointerPowerChips.setChoices(POINTER_POWER_VALUES, 2.0, percentLabel)
+        logLevelChips.setChoices(LOG_LEVEL_VALUES, LogLevel.INFO.ordinal.toDouble()) { value ->
+            when (value.toInt()) {
+                1 -> "ERR"
+                2 -> "WARN"
+                3 -> "INFO"
+                4 -> "DEBUG"
+                else -> "TRACE"
+            }
+        }
+
+        framingPowerChips.onValueSelected = { value ->
+            machineService?.updateSettings { it.copy(framingPowerPercent = value) }
+        }
+        framingFeedChips.onValueSelected = { value ->
+            machineService?.updateSettings { it.copy(framingFeedRate = value) }
+        }
+        pointerPowerChips.onValueSelected = { value ->
+            machineService?.updateSettings { it.copy(pointerPowerPercent = value) }
+        }
+        logLevelChips.onValueSelected = { value ->
+            val level = LogLevel.values()[value.toInt().coerceIn(0, LogLevel.values().lastIndex)]
+            machineService?.updateSettings { it.copy(logLevel = level) }
+        }
+        soundsSwitch.setOnCheckedChangeListener { _, checked ->
+            if (!displayingSettings) {
+                machineService?.updateSettings { it.copy(soundsEnabled = checked) }
+            }
+        }
+        findViewById<View>(R.id.buttonTestSound).setOnClickListener {
+            machineService?.playTestSound()
+        }
+        findViewById<View>(R.id.buttonHistory).setOnClickListener { showHistoryDialog() }
+        findViewById<View>(R.id.buttonLibrary).setOnClickListener { showOpenDialog() }
+    }
+
+    private fun observeSettings(service: MachineService) {
+        settingsJob?.cancel()
+        settingsJob =
+            activityScope.launch {
+                service.settings.collect { settings -> renderSettings(service, settings) }
+            }
+    }
+
+    private fun renderSettings(service: MachineService, settings: AppSettings) {
+        displayingSettings = true
+        framingPowerChips.selectValue(settings.framingPowerPercent)
+        framingFeedChips.selectValue(settings.framingFeedRate)
+        pointerPowerChips.selectValue(settings.pointerPowerPercent)
+        logLevelChips.selectValue(settings.logLevel.ordinal.toDouble())
+        soundsSwitch.isChecked = settings.soundsEnabled
+        displayingSettings = false
+
+        jogPanel.setLaserPointerPercent(settings.pointerPowerPercent)
+        aboutText.text = "Log file: ${service.logBook.currentFile.absolutePath}\n" +
+                "Library: ${File(filesDir, "library").absolutePath}"
+    }
+
     /*
      * ----------------------------------------------------
      * LOG AND UI STATE
@@ -1087,7 +1395,6 @@ class MainActivity : Activity() {
             return
         }
 
-        setLog(savedInstanceState.getString(SAVED_LOG)?.takeIf { it.isNotBlank() } ?: "LaserDroid ready.")
         jogPanel.setSelectedSpeed(savedInstanceState.getDouble(SAVED_JOG_SPEED, 1_000.0))
         jogPanel.setSelectedStep(savedInstanceState.getDouble(SAVED_JOG_STEP, 1.0))
         jobPanelView.isLaserOffChecked = savedInstanceState.getBoolean(SAVED_LASER_OFF, true)
@@ -1095,7 +1402,6 @@ class MainActivity : Activity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putString(SAVED_LOG, logText.text?.toString().orEmpty())
         outState.putDouble(SAVED_JOG_SPEED, jogPanel.getSelectedSpeed())
         outState.putDouble(SAVED_JOG_STEP, jogPanel.getSelectedStep())
         outState.putInt(SAVED_PAGE, currentPage)
@@ -1111,7 +1417,29 @@ class MainActivity : Activity() {
         }
     }
 
+    /*
+     * The log lives in the service (LogBook): Activity messages go
+     * there and come back through observeServiceLog().
+     */
     private fun appendLog(message: String) {
+        val service = machineService
+        if (service != null) {
+            service.logBook.info(message)
+        } else {
+            displayLogLine(message)
+        }
+    }
+
+    private fun observeServiceLog(service: MachineService) {
+        logJob?.cancel()
+        logJob =
+            activityScope.launch {
+                setLog(service.logBook.snapshot().joinToString("\n"))
+                service.logBook.entries.collect { line -> displayLogLine(line) }
+            }
+    }
+
+    private fun displayLogLine(message: String) {
         runOnUiThread {
             val editable = logText.editableText
             if (editable != null) {
@@ -1141,7 +1469,8 @@ class MainActivity : Activity() {
     }
 
     private fun clearLog() {
-        setLog("Log cleared.")
+        machineService?.logBook?.clearMemory()
+        setLog("")
     }
 
     private fun scrollLogToBottom() {

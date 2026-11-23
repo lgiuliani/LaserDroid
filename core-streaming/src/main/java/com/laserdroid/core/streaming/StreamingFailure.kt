@@ -13,4 +13,7 @@ sealed interface StreamingFailure {
     data object Timeout : StreamingFailure
 
     data object Disconnected : StreamingFailure
-}
+
+    /** The controller restarted during the stream. */
+    data object Reset : StreamingFailure
+}

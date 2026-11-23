@@ -4,6 +4,7 @@ import com.laserdroid.controllers.api.CncController
 import com.laserdroid.controllers.api.MachineState
 import com.laserdroid.core.gcode.GCodeAnalysis
 import com.laserdroid.core.gcode.GCodeAnalyzer
+import com.laserdroid.core.gcode.GCodeModalTracker
 import com.laserdroid.core.gcode.GCodeSource
 import com.laserdroid.core.gcode.LaserOffTransform
 import com.laserdroid.core.gcode.MachineProfile
@@ -35,6 +36,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.abs
 
 /**
  * Configuration of [JobManager].
@@ -50,7 +52,10 @@ data class JobConfig(
     val ackInactivityTimeoutMillis: Long = 10_000L,
 
     /** Max wait for Hold before the reset when stopping. */
-    val stopHoldTimeoutMillis: Long = 1_500L
+    val stopHoldTimeoutMillis: Long = 1_500L,
+
+    /** Tolerance between expected and reported position (mm). */
+    val recoveryToleranceMillimeters: Double = 0.5
 )
 
 /**
@@ -230,6 +235,8 @@ class JobManager(
         val analysis = current.analysis
 
         val rejection = when {
+            current.isRecoverable ->
+                "Interrupted job: choose Resume, Restart or Cancel"
             !current.state.canStart -> "Job state ${current.state}"
             programSource == null || analysis == null -> "No program loaded"
             activeController == null || activeMachine == null -> "Machine not connected"
@@ -269,6 +276,166 @@ class JobManager(
         }
 
         JobStartResult.Started
+    }
+
+    /**
+     * Evaluates the interrupted job against the position reported
+     * by the reconnected machine. Null if nothing to recover.
+     */
+    suspend fun assessRecovery(): RecoveryAssessment? {
+        val current = _snapshot.value
+        val programSource = source ?: return null
+        val activeController = controller ?: return null
+        val activeMachine = machine ?: return null
+        val line = current.currentLine ?: return null
+        if (!current.isRecoverable) return null
+
+        val modal = withContext(ioDispatcher) {
+            programSource.useLines { lines ->
+                GCodeModalTracker.stateAfter(lines.toGCodeLines(), line)
+            }
+        }
+
+        val machineState = activeMachine.snapshot.value
+        val connected = machineState.isConnected
+        val offset = activeController.workCoordinateOffset.value
+        val currentX = if (connected) machineState.position.x - offset.x else null
+        val currentY = if (connected) machineState.position.y - offset.y else null
+
+        val expectedX = modal.x
+        val expectedY = modal.y
+        val trusted = expectedX != null && expectedY != null &&
+                currentX != null && currentY != null &&
+                abs(expectedX - currentX) <= config.recoveryToleranceMillimeters &&
+                abs(expectedY - currentY) <= config.recoveryToleranceMillimeters
+
+        return RecoveryAssessment(
+            lineNumber = line,
+            commandsDone = current.commandsSent,
+            totalCommands = current.totalCommands,
+            expectedX = expectedX,
+            expectedY = expectedY,
+            currentX = currentX,
+            currentY = currentY,
+            positionTrusted = trusted,
+            positionUncertain = modal.positionUncertain
+        )
+    }
+
+    /**
+     * Continues an interrupted job (manual decision only).
+     *
+     * If the reported position does not match the expected one
+     * (GRBL reset), the work origin is first redefined with
+     * G10 L20 so that the current head position becomes the last
+     * executed point. The head must not have been moved.
+     */
+    suspend fun recover(
+        mode: RecoveryMode,
+        laserOff: Boolean
+    ): JobStartResult {
+        val assessment = assessRecovery()
+            ?: return JobStartResult.Rejected("Nothing to recover")
+
+        return commandMutex.withLock {
+            val current = _snapshot.value
+            val programSource = source
+            val activeController = controller
+            val activeMachine = machine
+            val analysis = current.analysis
+
+            if (programSource == null || activeController == null ||
+                activeMachine == null || analysis == null || !current.isRecoverable
+            ) {
+                return@withLock JobStartResult.Rejected("Nothing to recover")
+            }
+            if (!assessment.positionTrusted && !assessment.canResynchronize) {
+                return@withLock JobStartResult.Rejected(
+                    "Unknown position at line ${assessment.lineNumber}"
+                )
+            }
+
+            val preamble = mutableListOf<String>()
+            if (!assessment.positionTrusted) {
+                preamble += WorkshopCommands.resynchronize(
+                    assessment.expectedX!!,
+                    assessment.expectedY!!
+                )
+            }
+
+            val resume = mode == RecoveryMode.RESUME
+            if (resume) {
+                val modal = withContext(ioDispatcher) {
+                    programSource.useLines { lines ->
+                        GCodeModalTracker.stateAfter(
+                            lines.toGCodeLines(),
+                            assessment.lineNumber
+                        )
+                    }
+                }
+                preamble += WorkshopCommands.resumePreamble(modal, laserOff)
+            }
+
+            if (!activeMachine.beginJob()) {
+                return@withLock JobStartResult.Rejected(
+                    "Machine is not Idle (${activeMachine.snapshot.value.machineState})"
+                )
+            }
+
+            stopping = false
+            val alreadyDone = if (resume) assessment.commandsDone else 0
+            val startAfterLine = if (resume) assessment.lineNumber else 0L
+
+            _snapshot.value = JobSnapshot(
+                state = JobState.STARTING,
+                name = current.name,
+                analysis = analysis,
+                laserOff = laserOff,
+                totalCommands = analysis.executableCommands,
+                commandsSent = alreadyDone,
+                commandsAcknowledged = alreadyDone,
+                currentLine = if (resume) assessment.lineNumber else null,
+                startedAtMillis = clock(),
+                message = if (resume) {
+                    "Resumed after line ${assessment.lineNumber}"
+                } else {
+                    "Restarted from the beginning"
+                }
+            )
+
+            runJob = scope.launch {
+                runProgram(
+                    programSource,
+                    activeController,
+                    activeMachine,
+                    laserOff,
+                    preamble = preamble,
+                    startAfterLine = startAfterLine,
+                    alreadyDone = alreadyDone
+                )
+            }
+
+            JobStartResult.Started
+        }
+    }
+
+    /**
+     * Abandons an interrupted job. The program stays loaded (READY).
+     */
+    fun cancelRecovery(): Boolean {
+        val current = _snapshot.value
+        if (current.state != JobState.DISCONNECTED || source == null) {
+            return false
+        }
+        val analysis = current.analysis ?: return false
+        _snapshot.value = JobSnapshot(
+            state = JobState.READY,
+            name = current.name,
+            analysis = analysis,
+            totalCommands = analysis.executableCommands,
+            message = "Interrupted job cancelled"
+        )
+        return true
     }
 
     /** Feed hold ('!'). */
@@ -332,6 +499,15 @@ class JobManager(
             state = JobState.ABORTED,
             message = "Stopped by user"
         )
+
+        /*
+         * GRBL restarts after Ctrl-X: refresh the state so that the
+         * UI does not keep showing Hold.
+         */
+        scope.launch {
+            delay(config.stopHoldTimeoutMillis / 3)
+            runCatching { activeController.requestStatus() }
+        }
         true
     }
 
@@ -350,7 +526,10 @@ class JobManager(
         programSource: GCodeSource,
         activeController: CncController,
         activeMachine: MachineManager,
-        laserOff: Boolean
+        laserOff: Boolean,
+        preamble: List<String> = emptyList(),
+        startAfterLine: Long = 0L,
+        alreadyDone: Int = 0
     ) {
         val engine = SendResponseStreamingEngine(
             controller = activeController,
@@ -360,16 +539,31 @@ class JobManager(
         coroutineScope {
 
             val poller = launch { pollStatus(activeController) }
-            val progress = launch { mirrorProgress(engine) }
+            val progress = launch { mirrorProgress(engine, alreadyDone) }
             val watcher = launch { watchMachineState(activeController) }
 
             try {
                 transition(JobState.RUNNING)
 
-                val total = _snapshot.value.totalCommands
+                for (command in preamble) {
+                    val ack = activeController.executeCommand(
+                        command,
+                        config.ackInactivityTimeoutMillis
+                    )
+                    if (ack != com.laserdroid.controllers.api.CommandResult.Acknowledged) {
+                        runCatching { activeController.stop() }
+                        finish(JobState.ERROR, "Recovery command '$command' failed: $ack")
+                        return@coroutineScope
+                    }
+                }
+
+                val total = _snapshot.value.totalCommands - alreadyDone
                 val result = withContext(ioDispatcher) {
                     programSource.useLines { rawLines ->
                         var lines = rawLines.toGCodeLines()
+                        if (startAfterLine > 0L) {
+                            lines = lines.filter { it.originalLineNumber > startAfterLine }
+                        }
                         if (laserOff) {
                             lines = lines.map { LaserOffTransform.apply(it) }
                         }
@@ -393,7 +587,7 @@ class JobManager(
                 poller.cancel()
                 progress.cancel()
                 watcher.cancel()
-                mirrorProgressOnce(engine)
+                mirrorProgressOnce(engine, alreadyDone)
                 activeMachine.endJob()
             }
 
@@ -438,6 +632,12 @@ class JobManager(
                         JobState.DISCONNECTED,
                         "Connection lost at line ${result.lineNumber}"
                     )
+                    StreamingFailure.Reset -> if (!stopping) {
+                        finish(
+                            JobState.ERROR,
+                            "Controller reset during the job (line ${result.lineNumber})"
+                        )
+                    }
                 }
             }
 
@@ -499,14 +699,15 @@ class JobManager(
     }
 
     private suspend fun mirrorProgress(
-        engine: SendResponseStreamingEngine
+        engine: SendResponseStreamingEngine,
+        offset: Int
     ) {
         engine.progress.collect { progress ->
             _snapshot.update { current ->
-                if (current.state.isActive) {
+                if (current.state.isActive && progress.currentOriginalLine != null) {
                     current.copy(
-                        commandsSent = progress.commandsSent,
-                        commandsAcknowledged = progress.commandsAcknowledged,
+                        commandsSent = offset + progress.commandsSent,
+                        commandsAcknowledged = offset + progress.commandsAcknowledged,
                         currentLine = progress.currentOriginalLine
                     )
                 } else {
@@ -517,14 +718,18 @@ class JobManager(
     }
 
     private fun mirrorProgressOnce(
-        engine: SendResponseStreamingEngine
+        engine: SendResponseStreamingEngine,
+        offset: Int
     ) {
         val progress = engine.progress.value
+        if (progress.currentOriginalLine == null) {
+            return
+        }
         _snapshot.update {
             it.copy(
-                commandsSent = progress.commandsSent,
-                commandsAcknowledged = progress.commandsAcknowledged,
-                currentLine = progress.currentOriginalLine ?: it.currentLine
+                commandsSent = offset + progress.commandsSent,
+                commandsAcknowledged = offset + progress.commandsAcknowledged,
+                currentLine = progress.currentOriginalLine
             )
         }
     }

@@ -22,6 +22,8 @@ import com.laserdroid.MainActivity
 import com.laserdroid.R
 import com.laserdroid.communication.usb.UsbSerialConnection
 import com.laserdroid.communication.usb.UsbSerialTransport
+import com.laserdroid.controllers.api.CommandResult
+import com.laserdroid.controllers.api.ControllerEvent
 import com.laserdroid.controllers.api.MachinePosition
 import com.laserdroid.controllers.api.MachineState
 import com.laserdroid.controllers.grbl.GrblController
@@ -31,7 +33,10 @@ import com.laserdroid.core.gcode.MachineProfile
 import com.laserdroid.core.jobs.JobManager
 import com.laserdroid.core.jobs.JobSnapshot
 import com.laserdroid.core.jobs.JobState
+import com.laserdroid.core.jobs.WorkshopCommands
+import com.laserdroid.core.machine.MachineEvent
 import com.laserdroid.core.machine.MachineManager
+import com.laserdroid.core.machine.MachineOperationResult
 import com.laserdroid.core.machine.MachineSnapshot
 import java.io.File
 import java.util.Locale
@@ -40,307 +45,208 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * Foreground service owning the machine backend:
+ * USB transport, GRBL controller, MachineManager, JobManager,
+ * logs, sounds, settings and job history.
+ *
+ * Survives Activity recreation and keeps running screen off.
+ * Never reconnects or resumes a job automatically.
+ */
 class MachineService : Service() {
 
     companion object {
+        private const val NOTIFICATION_CHANNEL_ID = "laserdroid_machine"
+        private const val NOTIFICATION_CHANNEL_NAME = "LaserDroid machine connection"
+        private const val NOTIFICATION_ID = 1001
+        private const val LIBRARY_DIRECTORY = "library"
+        private const val LOG_DIRECTORY = "logs"
+        private const val WAKE_LOCK_TAG = "LaserDroid:job"
 
-        private const val NOTIFICATION_CHANNEL_ID =
-            "laserdroid_machine"
-
-        private const val NOTIFICATION_CHANNEL_NAME =
-            "LaserDroid machine connection"
-
-        private const val NOTIFICATION_ID =
-            1001
-
-        private const val LIBRARY_DIRECTORY =
-            "library"
-
-        private const val WAKE_LOCK_TAG =
-            "LaserDroid:job"
+        /* The LASER button never stays on longer than this. */
+        private const val POINTER_MAX_MILLIS = 30_000L
     }
-
-    /*
-     * ----------------------------------------------------
-     * LOCAL BINDER
-     * ----------------------------------------------------
-     */
 
     inner class LocalBinder : Binder() {
-
-        fun getService(): MachineService {
-            return this@MachineService
-        }
+        fun getService(): MachineService = this@MachineService
     }
 
-    private val binder =
-        LocalBinder()
+    private val binder = LocalBinder()
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /*
      * ----------------------------------------------------
-     * SERVICE SCOPE
+     * BACKEND
      * ----------------------------------------------------
      */
 
-    private val serviceScope =
-        CoroutineScope(
-            SupervisorJob() +
-                    Dispatchers.IO
-        )
+    private lateinit var usbConnection: UsbSerialConnection
+    private var usbTransport: UsbSerialTransport? = null
+    private var grblController: GrblController? = null
+    private var machineManager: MachineManager? = null
+    private var connectedDeviceId: Int? = null
 
-    /*
-     * ----------------------------------------------------
-     * USB BACKEND
-     * ----------------------------------------------------
-     */
+    /* Observers of the current MachineManager. */
+    private var backendObserverJobs: List<Job> = emptyList()
 
-    private lateinit var usbConnection:
-            UsbSerialConnection
-
-    private var usbTransport:
-            UsbSerialTransport? = null
-
-    /*
-     * ----------------------------------------------------
-     * GRBL / MACHINE BACKEND
-     * ----------------------------------------------------
-     */
-
-    private var grblController:
-            GrblController? = null
-
-    private var machineManager:
-            MachineManager? = null
-
-    /*
-     * Physical USB device currently associated
-     * with the backend.
-     */
-    private var connectedDeviceId:
-            Int? = null
-
-    /*
-     * Snapshot observer associated with the
-     * current MachineManager.
-     */
-    private var snapshotObserverJob:
-            Job? = null
-
-    /*
-     * ----------------------------------------------------
-     * SERVICE SNAPSHOT
-     * ----------------------------------------------------
-     */
-
-    private val _snapshot =
-        MutableStateFlow(
-            MachineSnapshot.initial()
-        )
-
-    val snapshot:
-            StateFlow<MachineSnapshot> =
-        _snapshot.asStateFlow()
+    private val _snapshot = MutableStateFlow(MachineSnapshot.initial())
+    val snapshot: StateFlow<MachineSnapshot> = _snapshot.asStateFlow()
 
     val manager: MachineManager?
         get() = machineManager
 
-    val isMachineBackendCreated: Boolean
-        get() = machineManager != null
-
     val isMachineConnected: Boolean
         get() = snapshot.value.isConnected
 
-    /**
-     * Current work coordinate offset (WCO).
-     * Work position = machine position - offset.
-     */
+    /** Work position = machine position - offset. */
     val workCoordinateOffset: MachinePosition
-        get() =
-            grblController
-                ?.workCoordinateOffset
-                ?.value
-                ?: MachinePosition.ZERO
+        get() = grblController?.workCoordinateOffset?.value ?: MachinePosition.ZERO
+
+    /* Firmware identification ([VER:...]) for the history. */
+    private var firmwareVersion: String? = null
 
     /*
      * ----------------------------------------------------
-     * JOB MANAGER
+     * JOBS, LOGS, SOUNDS, SETTINGS, HISTORY
      * ----------------------------------------------------
-     *
-     * Lives as long as the Service, independently of the
-     * USB session. A lost connection marks the job
-     * DISCONNECTED: it is never resumed automatically.
      */
 
-    val jobManager =
-        JobManager()
+    val jobManager = JobManager()
 
-    val jobSnapshot:
-            StateFlow<JobSnapshot>
+    val jobSnapshot: StateFlow<JobSnapshot>
         get() = jobManager.snapshot
 
-    /*
-     * Keeps the CPU running while a job is active,
-     * screen off included.
-     */
-    private var jobWakeLock:
-            PowerManager.WakeLock? = null
+    lateinit var logBook: LogBook
+        private set
 
-    private var jobObserverJob:
-            Job? = null
+    private val soundPlayer = SoundPlayer()
+
+    lateinit var settingsRepository: SettingsRepository
+        private set
+
+    val settings: StateFlow<AppSettings>
+        get() = settingsRepository.settings
+
+    private lateinit var historyStore: JobHistoryStore
+
+    private var jobWakeLock: PowerManager.WakeLock? = null
+
+    /* LASER button requests, applied in order (latest wins). */
+    private val pointerRequests = Channel<Boolean>(Channel.CONFLATED)
+    private var pointerWatchdog: Job? = null
+
+    private var framingJob: Job? = null
 
     /*
      * ----------------------------------------------------
-     * USB DETACH RECEIVER
+     * USB DETACH
      * ----------------------------------------------------
      */
 
     private val usbDetachReceiver =
         object : BroadcastReceiver() {
-
-            override fun onReceive(
-                context: Context,
-                intent: Intent
-            ) {
-
-                if (
-                    intent.action !=
-                    UsbManager.ACTION_USB_DEVICE_DETACHED
-                ) {
-                    return
-                }
-
-                val detachedDevice =
-                    getUsbDeviceFromIntent(
-                        intent
-                    )
-                        ?: return
-
-                val activeDeviceId =
-                    connectedDeviceId
-
-                /*
-                 * Ignore unrelated USB devices.
-                 */
-                if (
-                    activeDeviceId == null ||
-                    detachedDevice.deviceId !=
-                    activeDeviceId
-                ) {
-                    return
-                }
-
-                serviceScope.launch {
-
-                    handlePhysicalDisconnect(
-                        detachedDevice
-                    )
-                }
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action != UsbManager.ACTION_USB_DEVICE_DETACHED) return
+                val device = getUsbDeviceFromIntent(intent) ?: return
+                val activeId = connectedDeviceId ?: return
+                if (device.deviceId != activeId) return
+                serviceScope.launch { handlePhysicalDisconnect(device) }
             }
         }
 
     /*
      * ----------------------------------------------------
-     * SERVICE CREATION
+     * LIFECYCLE
      * ----------------------------------------------------
      */
 
     override fun onCreate() {
-
         super.onCreate()
 
-        usbConnection =
-            UsbSerialConnection(
-                applicationContext
-            )
+        usbConnection = UsbSerialConnection(applicationContext)
+        logBook = LogBook(File(filesDir, LOG_DIRECTORY))
+        settingsRepository = SettingsRepository(applicationContext, serviceScope)
+        historyStore = JobHistoryStore(applicationContext)
 
         registerUsbDetachReceiver()
-
         createNotificationChannel()
-
-        startJobObserver()
-
         startForeground(
             NOTIFICATION_ID,
-            createNotification(
-                title =
-                    "LaserDroid",
-
-                content =
-                    "Machine service ready"
-            )
+            createNotification("LaserDroid", "Machine service ready")
         )
+
+        observeSettings()
+        observeJob()
+        processPointerRequests()
+
+        logBook.info("LaserDroid service started.")
     }
 
-    override fun onBind(
-        intent: Intent?
-    ): IBinder {
+    override fun onBind(intent: Intent?): IBinder = binder
 
-        return binder
+    override fun onDestroy() {
+        runCatching { unregisterReceiver(usbDetachReceiver) }
+        closeMachineBackend("Service stopped")
+        releaseJobWakeLock()
+        jobManager.close()
+        soundPlayer.close()
+        logBook.info("LaserDroid service stopped.")
+        logBook.close()
+        runCatching { historyStore.close() }
+        _snapshot.value = MachineSnapshot.initial()
+        serviceScope.cancel()
+        super.onDestroy()
+    }
+
+    private fun registerUsbDetachReceiver() {
+        val filter = IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbDetachReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(usbDetachReceiver, filter)
+        }
+    }
+
+    private fun getUsbDeviceFromIntent(intent: Intent): UsbDevice? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+        }
     }
 
     /*
      * ----------------------------------------------------
-     * USB DETACH MANAGEMENT
+     * SETTINGS
      * ----------------------------------------------------
      */
 
-    private fun registerUsbDetachReceiver() {
-
-        val filter =
-            IntentFilter(
-                UsbManager.ACTION_USB_DEVICE_DETACHED
-            )
-
-        if (
-            Build.VERSION.SDK_INT >=
-            Build.VERSION_CODES.TIRAMISU
-        ) {
-
-            registerReceiver(
-                usbDetachReceiver,
-                filter,
-                Context.RECEIVER_NOT_EXPORTED
-            )
-
-        } else {
-
-            @Suppress("DEPRECATION")
-
-            registerReceiver(
-                usbDetachReceiver,
-                filter
-            )
+    private fun observeSettings() {
+        serviceScope.launch {
+            settings.collect { value ->
+                logBook.level = value.logLevel
+                soundPlayer.enabled = value.soundsEnabled
+            }
         }
     }
 
-    private fun getUsbDeviceFromIntent(
-        intent: Intent
-    ): UsbDevice? {
+    fun updateSettings(transform: (AppSettings) -> AppSettings) {
+        serviceScope.launch { settingsRepository.update(transform) }
+    }
 
-        return if (
-            Build.VERSION.SDK_INT >=
-            Build.VERSION_CODES.TIRAMISU
-        ) {
-
-            intent.getParcelableExtra(
-                UsbManager.EXTRA_DEVICE,
-                UsbDevice::class.java
-            )
-
-        } else {
-
-            @Suppress("DEPRECATION")
-
-            intent.getParcelableExtra(
-                UsbManager.EXTRA_DEVICE
-            )
-        }
+    fun playTestSound() {
+        soundPlayer.play(SoundPlayer.Sound.SUCCESS)
     }
 
     /*
@@ -349,608 +255,541 @@ class MachineService : Service() {
      * ----------------------------------------------------
      */
 
-    suspend fun connect(
-        device: UsbDevice
-    ): Result<Unit> {
+    suspend fun connect(device: UsbDevice): Result<Unit> {
 
-        /*
-         * Already connected.
-         */
-        if (
-            machineManager != null &&
-            snapshot.value.isConnected
-        ) {
-
-            return Result.success(
-                Unit
-            )
+        if (machineManager != null && snapshot.value.isConnected) {
+            return Result.success(Unit)
         }
 
-        /*
-         * Remove any stale backend from a previous
-         * failed or physically interrupted session.
-         */
-        if (
-            machineManager != null ||
-            usbTransport != null ||
-            grblController != null
-        ) {
-
-            closeMachineBackend()
-
-            _snapshot.value =
-                MachineSnapshot.initial()
+        if (machineManager != null || usbTransport != null || grblController != null) {
+            closeMachineBackend("Stale backend")
+            _snapshot.value = MachineSnapshot.initial()
         }
 
-        /*
-         * Publish CONNECTING before creating
-         * MachineManager.
-         *
-         * This avoids exposing an old state while
-         * the new physical connection is opening.
-         */
-        _snapshot.value =
-            MachineSnapshot.initial()
-                .copy(
-                    machineState =
-                        MachineState.Connecting
-                )
+        _snapshot.value = MachineSnapshot.initial().copy(machineState = MachineState.Connecting)
+        logBook.info("Connecting to ${device.vendorId}:${device.productId}...")
 
         return runCatching {
+            val transport = UsbSerialTransport(connection = usbConnection, device = device)
+            val controller = GrblController(transport)
+            val manager = MachineManager(controller = controller, statusPollIntervalMillis = 200L)
 
-            val transport =
-                UsbSerialTransport(
-                    connection =
-                        usbConnection,
+            usbTransport = transport
+            grblController = controller
+            machineManager = manager
+            connectedDeviceId = device.deviceId
 
-                    device =
-                        device
-                )
+            observeBackend(manager)
+            updateNotification("LaserDroid", "Connecting to CNC...")
 
-            val controller =
-                GrblController(
-                    transport
-                )
-
-            val manager =
-                MachineManager(
-                    controller =
-                        controller,
-
-                    statusPollIntervalMillis =
-                        200L
-                )
-
-            usbTransport =
-                transport
-
-            grblController =
-                controller
-
-            machineManager =
-                manager
-
-            /*
-             * Keep the device ID before connection
-             * so a physical detach occurring during
-             * connection can still be detected.
-             */
-            connectedDeviceId =
-                device.deviceId
-
-            startSnapshotObserver(
-                manager
-            )
-
-            updateNotification(
-                title =
-                    "LaserDroid",
-
-                content =
-                    "Connecting to CNC..."
-            )
-
-            /*
-             * This opens the USB transport,
-             * connects GRBL and requests status.
-             */
             manager.connect()
 
-            jobManager.attachMachine(
-                controller = controller,
-                machine = manager
-            )
+            jobManager.attachMachine(controller = controller, machine = manager)
 
             /*
-             * Read the GRBL settings ($$) once: travel and
-             * max rates are used by the G-code analysis.
-             * A failure here does not fail the connection.
+             * Read $$ once: travel, max rates and $30 are used by
+             * the analysis and the laser functions. GRBL may answer
+             * with its startup banner first (USB reset): retry once.
              */
-            runCatching {
-                manager.requestSettings()
+            var settingsResult = runCatching { manager.requestSettings() }.getOrNull()
+            if (settingsResult != CommandResult.Acknowledged) {
+                delay(1_500L)
+                settingsResult = runCatching { manager.requestSettings() }.getOrNull()
             }
-
+            if (settingsResult != CommandResult.Acknowledged) {
+                logBook.warning("GRBL settings not read: $settingsResult")
+            }
             Unit
-
         }.onSuccess {
-
-            updateNotificationFromSnapshot(
-                snapshot.value
-            )
-
-        }.onFailure {
-                exception ->
-
-            closeMachineBackend()
-
-            _snapshot.value =
-                MachineSnapshot.initial()
-
-            updateNotification(
-                title =
-                    "LaserDroid",
-
-                content =
-                    buildString {
-
-                        append(
-                            "Machine connection failed"
-                        )
-
-                        exception.message
-                            ?.takeIf {
-                                it.isNotBlank()
-                            }
-                            ?.let {
-                                    message ->
-
-                                append(
-                                    ": "
-                                )
-
-                                append(
-                                    message
-                                )
-                            }
-                    }
-            )
+            logBook.info("Machine connected.")
+            soundPlayer.play(SoundPlayer.Sound.CONNECT)
+            if (jobSnapshot.value.isRecoverable) {
+                logBook.warning("Interrupted job found: Resume, Restart or Cancel in JOB.")
+            }
+            updateNotificationFromSnapshot(snapshot.value)
+        }.onFailure { exception ->
+            closeMachineBackend("Connection failed")
+            _snapshot.value = MachineSnapshot.initial()
+            logBook.error("Connection failed: ${exception.message ?: exception.javaClass.simpleName}")
+            soundPlayer.play(SoundPlayer.Sound.ERROR)
+            updateNotification("LaserDroid", "Machine connection failed")
         }
     }
-
-    /*
-     * ----------------------------------------------------
-     * EXPLICIT DISCONNECT
-     * ----------------------------------------------------
-     */
 
     suspend fun disconnect() {
+        machineManager?.let { manager -> runCatching { manager.disconnect() } }
+        closeMachineBackend("Disconnected by user")
+        _snapshot.value = MachineSnapshot.initial()
+        logBook.info("Machine disconnected.")
+        soundPlayer.play(SoundPlayer.Sound.DISCONNECT)
+        updateNotification("LaserDroid", "Machine disconnected")
+    }
 
-        val manager =
-            machineManager
+    private fun handlePhysicalDisconnect(device: UsbDevice) {
+        _snapshot.value = MachineSnapshot.initial()
 
-        if (
-            manager != null
-        ) {
+        /*
+         * Destroy the whole session. Reconnection always builds a
+         * new transport, controller and MachineManager.
+         * Never reconnect or resume automatically.
+         */
+        closeMachineBackend("USB disconnected")
 
-            runCatching {
+        logBook.error("USB disconnected (${device.vendorId}:${device.productId}).")
+        soundPlayer.play(SoundPlayer.Sound.DISCONNECT)
+        updateNotification("LaserDroid", "USB disconnected")
+    }
 
-                manager.disconnect()
-            }
-        }
+    private fun closeMachineBackend(reason: String) {
+        // An active job becomes DISCONNECTED, never resumed automatically.
+        jobManager.detachMachine(reason)
 
-        closeMachineBackend()
+        pointerWatchdog?.cancel()
+        framingJob?.cancel()
 
-        _snapshot.value =
-            MachineSnapshot.initial()
+        backendObserverJobs.forEach { it.cancel() }
+        backendObserverJobs = emptyList()
 
-        updateNotification(
-            title =
-                "LaserDroid",
+        machineManager?.close()
+        machineManager = null
+        grblController = null
+        usbTransport = null
+        connectedDeviceId = null
+        firmwareVersion = null
 
-            content =
-                "Machine disconnected"
-        )
+        // Tolerates a device that already disappeared.
+        runCatching { usbConnection.close() }
     }
 
     /*
      * ----------------------------------------------------
-     * PHYSICAL USB DISCONNECT
+     * BACKEND OBSERVATION: SNAPSHOT, LOGS, SOUNDS
      * ----------------------------------------------------
      */
 
-    private suspend fun handlePhysicalDisconnect(
-        detachedDevice: UsbDevice
-    ) {
+    private fun observeBackend(manager: MachineManager) {
+        backendObserverJobs.forEach { it.cancel() }
 
-        /*
-         * Immediately tell all UI clients that
-         * the CNC is unavailable.
-         */
-        _snapshot.value =
-            MachineSnapshot.initial()
+        var previousState: MachineState? = null
 
-        /*
-         * Destroy the complete physical session.
-         *
-         * Reconnection will always create:
-         *
-         * new UsbSerialTransport
-         * new GrblController
-         * new MachineManager
-         */
-        closeMachineBackend(
-            reason =
-                "USB disconnected"
-        )
+        val snapshotJob = serviceScope.launch {
+            manager.snapshot.collect { value ->
+                /*
+                 * MachineManager publishes DISCONNECTED before
+                 * connect() completes: never destroy the backend
+                 * here. Physical removal is handled by the receiver.
+                 */
+                _snapshot.value = value
+                updateNotificationFromSnapshot(value)
 
-        updateNotification(
-            title =
-                "LaserDroid",
-
-            content =
-                "USB disconnected " +
-                        "(${detachedDevice.vendorId}:" +
-                        "${detachedDevice.productId})"
-        )
-
-        /*
-         * IMPORTANT:
-         *
-         * Do NOT reconnect automatically.
-         * Do NOT resume a previous job.
-         */
-    }
-
-    /*
-     * ----------------------------------------------------
-     * MACHINE SNAPSHOT
-     * ----------------------------------------------------
-     */
-
-    private fun startSnapshotObserver(
-        manager: MachineManager
-    ) {
-
-        snapshotObserverJob?.cancel()
-
-        snapshotObserverJob =
-            serviceScope.launch {
-
-                manager.snapshot.collect {
-                        value ->
-
-                    /*
-                     * IMPORTANT:
-                     *
-                     * MachineManager initially publishes
-                     * DISCONNECTED before connect() has
-                     * completed.
-                     *
-                     * Therefore a DISCONNECTED snapshot
-                     * MUST NOT automatically destroy
-                     * the backend here.
-                     *
-                     * Physical USB removal is handled
-                     * separately by usbDetachReceiver.
-                     */
-                    _snapshot.value =
-                        value
-
-                    updateNotificationFromSnapshot(
-                        value
-                    )
+                val state = value.machineState
+                if (state != previousState) {
+                    if (state == MachineState.Alarm && previousState != null) {
+                        logBook.error("Machine in ALARM: tap the state or UNLOCK.")
+                        if (!jobManager.snapshot.value.state.isActive) {
+                            soundPlayer.play(SoundPlayer.Sound.ERROR)
+                        }
+                    }
+                    previousState = state
                 }
             }
+        }
+
+        val machineEventsJob = serviceScope.launch {
+            manager.events.collect { event ->
+                when (event) {
+                    MachineEvent.Connected -> Unit
+                    MachineEvent.Disconnected -> Unit
+                    is MachineEvent.JogStarted -> logBook.debug(event.description)
+                    is MachineEvent.PositionUpdated -> Unit
+                    is MachineEvent.JogCompleted -> logBook.debug(
+                        "Move completed: X=${formatCoordinate(event.position.x)}, " +
+                                "Y=${formatCoordinate(event.position.y)}"
+                    )
+                    MachineEvent.JogCancelled -> logBook.debug("Jog cancelled.")
+                    is MachineEvent.Error -> logBook.error("Machine error: ${event.message}")
+                }
+            }
+        }
+
+        /* Detailed GRBL output: $0=10, [VER:...], error:..., ALARM:... */
+        val controllerEventsJob = serviceScope.launch {
+            manager.controllerEvents.collect { event ->
+                when (event) {
+                    is ControllerEvent.SettingReceived ->
+                        logBook.info("\$${event.number}=${event.value}")
+                    is ControllerEvent.MessageReceived -> {
+                        if (event.message.startsWith("[VER:")) {
+                            firmwareVersion = event.message.removePrefix("[VER:").removeSuffix("]")
+                        }
+                        logBook.info(event.message)
+                    }
+                    is ControllerEvent.ErrorReceived ->
+                        logBook.error("GRBL error:${event.code ?: "?"}")
+                    is ControllerEvent.AlarmReceived ->
+                        logBook.error("GRBL ALARM:${event.code ?: "?"}")
+                    is ControllerEvent.ResetDetected ->
+                        logBook.warning("GRBL restarted: ${event.banner}")
+                    ControllerEvent.Connected,
+                    ControllerEvent.Disconnected -> Unit
+                }
+            }
+        }
+
+        backendObserverJobs = listOf(snapshotJob, machineEventsJob, controllerEventsJob)
     }
 
     /*
      * ----------------------------------------------------
-     * BACKEND CLEANUP
+     * JOB OBSERVATION: WAKE LOCK, NOTIFICATION, LOG, SOUND, HISTORY
      * ----------------------------------------------------
      */
 
-    private fun closeMachineBackend(
-        reason: String = "Machine disconnected"
-    ) {
+    private fun observeJob() {
+        serviceScope.launch {
+            var lastState: JobState? = null
+            var lastPercent = -1
+            var lastSnapshot: JobSnapshot? = null
 
-        /*
-         * An active job becomes DISCONNECTED.
-         * Never resumed automatically.
-         */
-        jobManager.detachMachine(
-            reason
-        )
+            jobManager.snapshot.collect { job ->
+                updateJobWakeLock(job.state.isActive)
 
-        /*
-         * Stop observing the old MachineManager.
-         */
-        snapshotObserverJob?.cancel()
+                val previous = lastSnapshot
+                if (job.state != lastState) {
+                    onJobStateChanged(previous, job)
+                }
 
-        snapshotObserverJob =
-            null
-
-        /*
-         * Stop manager-owned coroutines.
-         */
-        machineManager?.close()
-
-        machineManager =
-            null
-
-        /*
-         * Drop GRBL/transport references.
-         */
-        grblController =
-            null
-
-        usbTransport =
-            null
-
-        connectedDeviceId =
-            null
-
-        /*
-         * Close the physical serial connection.
-         *
-         * This must tolerate the USB device already
-         * having disappeared physically.
-         */
-        runCatching {
-
-            usbConnection.close()
+                val percent = job.percent.toInt()
+                if (job.state != lastState || percent != lastPercent) {
+                    lastState = job.state
+                    lastPercent = percent
+                    updateNotificationFromSnapshot(snapshot.value)
+                }
+                lastSnapshot = job
+            }
         }
+    }
+
+    private fun onJobStateChanged(previous: JobSnapshot?, job: JobSnapshot) {
+        if (previous == null) return
+
+        val message = job.message?.let { ": $it" }.orEmpty()
+        when (job.state) {
+            JobState.READY -> job.analysis?.let { analysis ->
+                logBook.info(
+                    "Loaded ${analysis.name}: ${analysis.executableCommands} commands, " +
+                            "errors ${analysis.errorCount}, warnings ${analysis.warningCount}"
+                )
+                analysis.warnings.take(10).forEach { warning ->
+                    logBook.log(
+                        if (warning.severity.name == "ERROR") LogLevel.ERROR else LogLevel.WARNING,
+                        "  L${warning.lineNumber}: ${warning.message}"
+                    )
+                }
+                when {
+                    analysis.errorCount > 0 -> soundPlayer.play(SoundPlayer.Sound.ERROR)
+                    analysis.warningCount > 0 -> soundPlayer.play(SoundPlayer.Sound.WARNING)
+                }
+            }
+            JobState.RUNNING ->
+                if (previous.state == JobState.STARTING) {
+                    logBook.info(
+                        "Job ${job.name} started" + if (job.laserOff) " (LASER OFF)" else " (LASER ON)"
+                    )
+                } else {
+                    logBook.info("Job running")
+                }
+            JobState.PAUSED -> {
+                logBook.warning("Job paused (feed hold)")
+                soundPlayer.play(SoundPlayer.Sound.WARNING)
+            }
+            JobState.COMPLETED -> {
+                logBook.info("JOB COMPLETED$message")
+                soundPlayer.play(SoundPlayer.Sound.SUCCESS)
+            }
+            JobState.ERROR -> {
+                logBook.error("JOB ERROR$message")
+                soundPlayer.play(SoundPlayer.Sound.ERROR)
+            }
+            JobState.ABORTED -> {
+                logBook.warning("JOB ABORTED$message")
+                soundPlayer.play(SoundPlayer.Sound.WARNING)
+            }
+            JobState.DISCONNECTED -> logBook.error("JOB INTERRUPTED$message")
+            else -> logBook.debug("Job ${job.state.name}$message")
+        }
+
+        if (previous.state.isActive && !job.state.isActive) {
+            recordHistory(job)
+        }
+    }
+
+    private fun recordHistory(job: JobSnapshot) {
+        val started = job.startedAtMillis ?: return
+        val analysis = job.analysis
+        val bounds = analysis?.workBounds ?: analysis?.totalBounds
+        val entry = JobHistoryEntry(
+            name = job.name ?: "?",
+            sizeBytes = analysis?.sizeBytes ?: -1L,
+            commands = job.totalCommands,
+            width = bounds?.width,
+            height = bounds?.height,
+            estimatedMillis = analysis?.estimatedDurationMillis ?: 0L,
+            machine = firmwareVersion,
+            startedAt = started,
+            endedAt = job.endedAtMillis ?: System.currentTimeMillis(),
+            state = job.state.name,
+            percent = job.percent,
+            laserOff = job.laserOff,
+            message = job.message
+        )
+        serviceScope.launch {
+            runCatching { historyStore.insert(entry) }
+                .onFailure { logBook.error("History not saved: ${it.message}") }
+        }
+    }
+
+    suspend fun loadHistory(): List<JobHistoryEntry> =
+        withContext(Dispatchers.IO) { runCatching { historyStore.recent() }.getOrDefault(emptyList()) }
+
+    suspend fun clearHistory() {
+        withContext(Dispatchers.IO) { runCatching { historyStore.clear() } }
+        logBook.info("History cleared.")
+    }
+
+    private fun updateJobWakeLock(active: Boolean) {
+        if (!active) {
+            releaseJobWakeLock()
+            return
+        }
+        if (jobWakeLock?.isHeld == true) return
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        jobWakeLock = powerManager
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG)
+            .apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+    }
+
+    private fun releaseJobWakeLock() {
+        runCatching { jobWakeLock?.takeIf { it.isHeld }?.release() }
+        jobWakeLock = null
     }
 
     /*
      * ----------------------------------------------------
-     * G-CODE LIBRARY AND JOB LOADING
+     * WORKSHOP: FRAMING, LASER POINTER, WORK ZERO
      * ----------------------------------------------------
      */
 
     /**
-     * Copies the document selected with the Storage Access
-     * Framework into the private library, then analyzes it.
-     *
-     * The copy keeps the program available even if the
-     * temporary SAF permission is revoked.
+     * Traces the rectangle of the loaded program with the laser at
+     * the configured low power. Returns a refusal reason or null.
      */
-    suspend fun importAndLoad(
-        uri: Uri
-    ): Result<GCodeAnalysis> {
+    fun startFraming(): String? {
+        val activeManager = machineManager ?: return "Machine is not connected"
+        val job = jobSnapshot.value
+        if (job.state.isActive) return "A job is running"
+        val analysis = job.analysis ?: return "No program loaded"
+        val bounds = analysis.workBounds ?: analysis.totalBounds ?: return "Program has no moves"
+        if (!activeManager.snapshot.value.canJog) {
+            return "Machine is not Idle"
+        }
+        if (framingJob?.isActive == true) return "Framing already running"
 
-        val file =
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    copyToLibrary(uri)
+        val current = settings.value
+        val power = WorkshopCommands.powerValue(
+            current.framingPowerPercent,
+            activeManager.maxLaserPower
+        )
+        val commands = WorkshopCommands.framing(bounds, current.framingFeedRate, power)
+
+        logBook.info(
+            String.format(
+                Locale.US,
+                "Framing %.1f x %.1f mm, laser %.0f%% (S%s)",
+                bounds.width,
+                bounds.height,
+                current.framingPowerPercent,
+                WorkshopCommands.format(power)
+            )
+        )
+
+        framingJob = serviceScope.launch {
+            val result = activeManager.runFraming(
+                commands = commands,
+                pathLengthMillimeters = WorkshopCommands.framingLength(bounds),
+                feedRate = current.framingFeedRate
+            )
+            when (result) {
+                is MachineOperationResult.Completed -> logBook.info("Framing completed.")
+                else -> {
+                    logBook.warning("Framing interrupted: $result")
+                    soundPlayer.play(SoundPlayer.Sound.WARNING)
                 }
-            }.getOrElse { exception ->
-                return Result.failure(exception)
             }
+        }
+        return null
+    }
 
+    val isFraming: Boolean
+        get() = machineManager?.framingActive?.value == true
+
+    fun stopFraming() {
+        val activeManager = machineManager ?: return
+        serviceScope.launch {
+            runCatching { activeManager.stopFraming() }
+            logBook.warning("Framing stopped.")
+        }
+    }
+
+    /**
+     * Hold-to-fire LASER button: on while pressed, at the configured
+     * power, with a safety limit of 30 s.
+     */
+    fun laserPointer(on: Boolean) {
+        pointerRequests.trySend(on)
+    }
+
+    private fun processPointerRequests() {
+        serviceScope.launch {
+            for (on in pointerRequests) {
+                val activeManager = machineManager ?: continue
+                if (on) {
+                    val percent = settings.value.pointerPowerPercent
+                    val result = runCatching { activeManager.laserPointerOn(percent) }.getOrNull()
+                    if (result == CommandResult.Acknowledged) {
+                        logBook.warning(
+                            String.format(Locale.US, "LASER ON %.0f%%", percent)
+                        )
+                        pointerWatchdog?.cancel()
+                        pointerWatchdog = serviceScope.launch {
+                            delay(POINTER_MAX_MILLIS)
+                            logBook.warning("LASER safety timeout: off.")
+                            pointerRequests.trySend(false)
+                        }
+                    } else {
+                        logBook.warning("LASER refused: $result")
+                    }
+                } else {
+                    pointerWatchdog?.cancel()
+                    pointerWatchdog = null
+                    runCatching { activeManager.laserPointerOff() }
+                    logBook.info("LASER OFF")
+                }
+            }
+        }
+    }
+
+    suspend fun setWorkZero(): CommandResult {
+        val activeManager = machineManager ?: return CommandResult.Disconnected
+        val result = activeManager.setWorkZero()
+        if (result == CommandResult.Acknowledged) {
+            logBook.info("Work origin set: current position = X0 Y0 (G10 L20 P1).")
+        } else {
+            logBook.warning("Set zero refused: $result")
+        }
+        return result
+    }
+
+    /*
+     * ----------------------------------------------------
+     * G-CODE LIBRARY
+     * ----------------------------------------------------
+     */
+
+    private val libraryDirectory: File
+        get() = File(filesDir, LIBRARY_DIRECTORY).apply { mkdirs() }
+
+    /** Library files, most recent first. */
+    fun libraryFiles(): List<File> {
+        return libraryDirectory
+            .listFiles { file -> file.isFile && !file.name.endsWith(".part") }
+            ?.sortedByDescending { it.lastModified() }
+            .orEmpty()
+    }
+
+    fun deleteLibraryFiles(files: List<File>): Int {
+        val directory = libraryDirectory.canonicalFile
+        var deleted = 0
+        files.forEach { file ->
+            // Never delete outside the library.
+            if (file.canonicalFile.parentFile == directory && file.delete()) {
+                deleted++
+            }
+        }
+        logBook.info("$deleted file(s) deleted from the library.")
+        return deleted
+    }
+
+    /**
+     * Copies a document chosen with the Storage Access Framework
+     * into the private library, then analyzes it.
+     */
+    suspend fun importAndLoad(uri: Uri): Result<GCodeAnalysis> {
+        val file = runCatching {
+            withContext(Dispatchers.IO) { copyToLibrary(uri) }
+        }.getOrElse { exception ->
+            logBook.error("Import failed: ${exception.message}")
+            return Result.failure(exception)
+        }
         return loadLibraryFile(file)
     }
 
-    suspend fun loadLibraryFile(
-        file: File
-    ): Result<GCodeAnalysis> {
-
-        val profile =
-            machineManager
-                ?.settings
-                ?.value
-                ?.takeIf { it.isNotEmpty() }
-                ?.let {
-                    MachineProfile.fromGrblSettings(it)
-                }
-
-        return jobManager.load(
-            newSource =
-                FileGCodeSource(file),
-
-            profile =
-                profile
-        )
+    suspend fun loadLibraryFile(file: File): Result<GCodeAnalysis> {
+        logBook.info("Loading ${file.name}...")
+        val profile = machineManager
+            ?.settings
+            ?.value
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { MachineProfile.fromGrblSettings(it) }
+        // Touch: most recent first in the library.
+        runCatching { file.setLastModified(System.currentTimeMillis()) }
+        val result = jobManager.load(newSource = FileGCodeSource(file), profile = profile)
+        result.onFailure { logBook.error("Load failed: ${it.message}") }
+        return result
     }
 
-    private fun copyToLibrary(
-        uri: Uri
-    ): File {
+    private fun copyToLibrary(uri: Uri): File {
+        val directory = libraryDirectory
+        val target = File(directory, sanitizeFileName(queryDisplayName(uri) ?: "program.nc"))
+        val temporary = File(directory, target.name + ".part")
 
-        val directory =
-            File(
-                filesDir,
-                LIBRARY_DIRECTORY
-            ).apply {
-                mkdirs()
+        contentResolver.openInputStream(uri)?.use { input ->
+            temporary.outputStream().use { output ->
+                input.copyTo(output, bufferSize = 64 * 1024)
             }
+        } ?: throw IllegalStateException("Cannot open the selected file")
 
-        val target =
-            File(
-                directory,
-                sanitizeFileName(
-                    queryDisplayName(uri)
-                        ?: "program.nc"
-                )
-            )
-
-        val temporary =
-            File(
-                directory,
-                target.name + ".part"
-            )
-
-        contentResolver
-            .openInputStream(uri)
-            ?.use { input ->
-
-                temporary
-                    .outputStream()
-                    .use { output ->
-                        input.copyTo(
-                            output,
-                            bufferSize = 64 * 1024
-                        )
-                    }
-            }
-            ?: throw IllegalStateException(
-                "Cannot open the selected file"
-            )
-
-        if (
-            target.exists() &&
-            !target.delete()
-        ) {
-            throw IllegalStateException(
-                "Cannot replace ${target.name}"
-            )
+        if (target.exists() && !target.delete()) {
+            throw IllegalStateException("Cannot replace ${target.name}")
         }
-
         if (!temporary.renameTo(target)) {
-            throw IllegalStateException(
-                "Cannot save ${target.name}"
-            )
+            throw IllegalStateException("Cannot save ${target.name}")
         }
-
         return target
     }
 
-    private fun queryDisplayName(
-        uri: Uri
-    ): String? {
-
+    private fun queryDisplayName(uri: Uri): String? {
         return runCatching {
-
             contentResolver.query(
-                uri,
-                arrayOf(
-                    OpenableColumns.DISPLAY_NAME
-                ),
-                null,
-                null,
-                null
+                uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
             )?.use { cursor ->
-
-                if (cursor.moveToFirst()) {
-                    cursor.getString(0)
-                } else {
-                    null
-                }
+                if (cursor.moveToFirst()) cursor.getString(0) else null
             }
         }.getOrNull()
     }
 
-    /*
-     * Keeps only a safe file name: no path separators,
-     * no hidden files.
-     */
-    private fun sanitizeFileName(
-        name: String
-    ): String {
-
-        val cleaned =
-            name
-                .substringAfterLast('/')
-                .substringAfterLast('\\')
-                .replace(
-                    Regex("[^A-Za-z0-9._ -]"),
-                    "_"
-                )
-                .trim()
-                .trimStart('.')
-
-        return cleaned.ifEmpty {
-            "program.nc"
-        }
-    }
-
-    /*
-     * ----------------------------------------------------
-     * JOB OBSERVATION: WAKE LOCK + NOTIFICATION
-     * ----------------------------------------------------
-     */
-
-    private fun startJobObserver() {
-
-        jobObserverJob?.cancel()
-
-        jobObserverJob =
-            serviceScope.launch {
-
-                var lastState: JobState? = null
-                var lastPercent = -1
-
-                jobManager.snapshot.collect { job ->
-
-                    updateJobWakeLock(
-                        job.state.isActive
-                    )
-
-                    val percent =
-                        job.percent.toInt()
-
-                    /*
-                     * Refresh the notification on state
-                     * changes and every 1%, not on every
-                     * acknowledged line.
-                     */
-                    if (
-                        job.state != lastState ||
-                        percent != lastPercent
-                    ) {
-                        lastState = job.state
-                        lastPercent = percent
-
-                        updateNotificationFromSnapshot(
-                            snapshot.value
-                        )
-                    }
-                }
-            }
-    }
-
-    private fun updateJobWakeLock(
-        active: Boolean
-    ) {
-
-        if (active) {
-
-            if (jobWakeLock?.isHeld == true) {
-                return
-            }
-
-            val powerManager =
-                getSystemService(
-                    POWER_SERVICE
-                ) as PowerManager
-
-            jobWakeLock =
-                powerManager
-                    .newWakeLock(
-                        PowerManager.PARTIAL_WAKE_LOCK,
-                        WAKE_LOCK_TAG
-                    )
-                    .apply {
-                        setReferenceCounted(false)
-                        acquire()
-                    }
-
-        } else {
-
-            releaseJobWakeLock()
-        }
-    }
-
-    private fun releaseJobWakeLock() {
-
-        runCatching {
-
-            jobWakeLock
-                ?.takeIf { it.isHeld }
-                ?.release()
-        }
-
-        jobWakeLock =
-            null
+    /* Only a safe file name: no path separators, no hidden files. */
+    private fun sanitizeFileName(name: String): String {
+        val cleaned = name
+            .substringAfterLast('/')
+            .substringAfterLast('\\')
+            .replace(Regex("[^A-Za-z0-9._ -]"), "_")
+            .trim()
+            .trimStart('.')
+        return cleaned.ifEmpty { "program.nc" }
     }
 
     /*
@@ -960,246 +799,67 @@ class MachineService : Service() {
      */
 
     private fun createNotificationChannel() {
-
-        if (
-            Build.VERSION.SDK_INT <
-            Build.VERSION_CODES.O
-        ) {
-            return
+        val channel = NotificationChannel(
+            NOTIFICATION_CHANNEL_ID,
+            NOTIFICATION_CHANNEL_NAME,
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "LaserDroid CNC connection state"
+            setShowBadge(false)
         }
-
-        val channel =
-            NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                NOTIFICATION_CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-
-                description =
-                    "LaserDroid CNC connection state"
-
-                setShowBadge(
-                    false
-                )
-            }
-
-        val manager =
-            getSystemService(
-                NotificationManager::class.java
-            )
-
-        manager.createNotificationChannel(
-            channel
-        )
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    private fun createNotification(
-        title: String,
-        content: String
-    ): Notification {
-
-        val openApplicationIntent =
-            Intent(
-                this,
-                MainActivity::class.java
-            ).apply {
-
-                flags =
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-
-        val pendingIntent =
-            PendingIntent.getActivity(
-                this,
-                0,
-                openApplicationIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or
-                        PendingIntent.FLAG_IMMUTABLE
-            )
-
-        return NotificationCompat
-            .Builder(
-                this,
-                NOTIFICATION_CHANNEL_ID
-            )
-            .setSmallIcon(
-                R.drawable.ic_launcher_foreground
-            )
-            .setContentTitle(
-                title
-            )
-            .setContentText(
-                content
-            )
-            .setContentIntent(
-                pendingIntent
-            )
-            .setOngoing(
-                true
-            )
-            .setOnlyAlertOnce(
-                true
-            )
-            .setPriority(
-                NotificationCompat.PRIORITY_LOW
-            )
-            .setCategory(
-                NotificationCompat.CATEGORY_SERVICE
-            )
+    private fun createNotification(title: String, content: String): Notification {
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(title)
+            .setContentText(content)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
     }
 
-    private fun updateNotificationFromSnapshot(
-        snapshot: MachineSnapshot
-    ) {
-
-        val machineStateText =
-            when (
-                snapshot.machineState
-            ) {
-
-                MachineState.Disconnected ->
-                    "DISCONNECTED"
-
-                MachineState.Connecting ->
-                    "CONNECTING"
-
-                MachineState.Idle ->
-                    "IDLE"
-
-                MachineState.Running ->
-                    "RUNNING"
-
-                MachineState.Jog ->
-                    "JOG"
-
-                MachineState.Hold ->
-                    "HOLD"
-
-                MachineState.Alarm ->
-                    "ALARM"
-
-                is MachineState.Error ->
-                    "ERROR"
-            }
-
-        val content =
-            buildString {
-
-                append(
-                    machineStateText
-                )
-
-                append(
-                    " | X="
-                )
-
-                append(
-                    formatCoordinate(
-                        snapshot.position.x
-                    )
-                )
-
-                append(
-                    " Y="
-                )
-
-                append(
-                    formatCoordinate(
-                        snapshot.position.y
-                    )
-                )
-            }
-
-        val job =
-            jobManager.snapshot.value
-
-        val title =
-            if (job.state.isActive) {
-                String.format(
-                    Locale.US,
-                    "LaserDroid job %s %.1f%%",
-                    job.state.name,
-                    job.percent
-                )
-            } else {
-                "LaserDroid machine"
-            }
-
-        updateNotification(
-            title =
-                title,
-
-            content =
-                content
-        )
-    }
-
-    private fun updateNotification(
-        title: String,
-        content: String
-    ) {
-
-        val manager =
-            getSystemService(
-                NotificationManager::class.java
-            )
-
-        manager.notify(
-            NOTIFICATION_ID,
-            createNotification(
-                title =
-                    title,
-
-                content =
-                    content
-            )
-        )
-    }
-
-    private fun formatCoordinate(
-        value: Double
-    ): String {
-
-        return String.format(
-            java.util.Locale.US,
-            "%.3f",
-            value
-        )
-    }
-
-    /*
-     * ----------------------------------------------------
-     * SERVICE DESTRUCTION
-     * ----------------------------------------------------
-     */
-
-    override fun onDestroy() {
-
-        runCatching {
-
-            unregisterReceiver(
-                usbDetachReceiver
-            )
+    private fun updateNotificationFromSnapshot(machine: MachineSnapshot) {
+        val stateText = when (val state = machine.machineState) {
+            MachineState.Disconnected -> "DISCONNECTED"
+            MachineState.Connecting -> "CONNECTING"
+            MachineState.Idle -> "IDLE"
+            MachineState.Running -> "RUNNING"
+            MachineState.Jog -> "JOG"
+            MachineState.Hold -> "HOLD"
+            MachineState.Alarm -> "ALARM"
+            is MachineState.Error -> "ERROR ${state.message}"
         }
+        val content = "$stateText | X=${formatCoordinate(machine.position.x)} " +
+                "Y=${formatCoordinate(machine.position.y)}"
 
-        closeMachineBackend(
-            reason =
-                "Service stopped"
-        )
-
-        jobObserverJob?.cancel()
-
-        releaseJobWakeLock()
-
-        jobManager.close()
-
-        _snapshot.value =
-            MachineSnapshot.initial()
-
-        serviceScope.cancel()
-
-        super.onDestroy()
+        val job = jobManager.snapshot.value
+        val title = if (job.state.isActive) {
+            String.format(Locale.US, "LaserDroid job %s %.1f%%", job.state.name, job.percent)
+        } else {
+            "LaserDroid machine"
+        }
+        updateNotification(title, content)
     }
-}
+
+    private fun updateNotification(title: String, content: String) {
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, createNotification(title, content))
+    }
+
+    private fun formatCoordinate(value: Double): String =
+        String.format(Locale.US, "%.3f", value)
+}

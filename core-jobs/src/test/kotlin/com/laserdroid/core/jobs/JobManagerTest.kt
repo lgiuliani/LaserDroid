@@ -332,6 +332,96 @@ class JobManagerTest {
         waitUntil { !f.machine.snapshot.value.jobActive }
     }
 
+    private suspend fun Fixture.interruptAt(command: Int) {
+        controller.disconnectAt = command
+        jobs.load(TextGCodeSource("job.nc", program(200)))
+        jobs.start(laserOff = false)
+        waitForState(JobState.DISCONNECTED)
+        waitUntil { !machine.snapshot.value.jobActive }
+        // Reconnection: controller back, Idle.
+        controller.disconnectAt = null
+        controller.commands.clear()
+        controller.state.value = MachineState.Idle
+        jobs.attachMachine(controller, machine)
+        waitUntil { machine.snapshot.value.machineState == MachineState.Idle }
+    }
+
+    @Test
+    fun `interrupted job must be recovered explicitly`() = runBlocking<Unit> {
+        val f = fixture()
+        f.interruptAt(30)
+        assertTrue(f.jobs.snapshot.value.isRecoverable)
+        assertEquals(31L, f.jobs.snapshot.value.currentLine)
+        assertIs<JobStartResult.Rejected>(f.jobs.start(laserOff = true))
+        assertTrue(f.controller.commands.isEmpty())
+    }
+
+    @Test
+    fun `resume with verified position`() = runBlocking<Unit> {
+        val f = fixture()
+        f.interruptAt(30)
+        // Command 30 = line 31 = G1 X26 Y0: GRBL kept its position.
+        f.controller.machinePosition.value = MachinePosition(26.0, 0.0, 0.0)
+        waitUntil { f.machine.snapshot.value.position.x == 26.0 }
+
+        val assessment = f.jobs.assessRecovery()!!
+        assertTrue(assessment.positionTrusted)
+        assertEquals(31L, assessment.lineNumber)
+        assertEquals(30, assessment.commandsDone)
+
+        assertIs<JobStartResult.Started>(f.jobs.recover(RecoveryMode.RESUME, laserOff = false))
+        f.waitForState(JobState.COMPLETED)
+
+        val commands = f.controller.commands
+        assertEquals(
+            listOf("M5 S0", "G21", "G90", "G0 X26 Y0", "F1200", "M4 S500", "G1"),
+            commands.take(7)
+        )
+        assertEquals("G1 X27 Y0", commands[7])
+        assertEquals(7 + 174, commands.size)
+        assertEquals(204, f.jobs.snapshot.value.commandsAcknowledged)
+    }
+
+    @Test
+    fun `resume after reset redefines the work origin`() = runBlocking<Unit> {
+        val f = fixture()
+        f.interruptAt(30)
+        // Position lost (hard reset): MPos 0,0.
+        val assessment = f.jobs.assessRecovery()!!
+        assertFalse(assessment.positionTrusted)
+
+        f.jobs.recover(RecoveryMode.RESUME, laserOff = true)
+        f.waitForState(JobState.COMPLETED)
+
+        val commands = f.controller.commands
+        assertEquals(listOf("G21", "G90", "G10 L20 P1 X26 Y0"), commands.take(3))
+        assertEquals("S0", commands[8])
+        assertTrue(commands.none { it.contains("M4") })
+    }
+
+    @Test
+    fun `restart from the beginning`() = runBlocking<Unit> {
+        val f = fixture()
+        f.interruptAt(30)
+        f.jobs.recover(RecoveryMode.RESTART, laserOff = true)
+        f.waitForState(JobState.COMPLETED)
+
+        val commands = f.controller.commands
+        assertEquals("G10 L20 P1 X26 Y0", commands[2])
+        assertEquals("G21 G90", commands[3])
+        assertEquals(3 + 204, commands.size)
+    }
+
+    @Test
+    fun `cancel recovery keeps the program`() = runBlocking<Unit> {
+        val f = fixture()
+        f.interruptAt(30)
+        assertTrue(f.jobs.cancelRecovery())
+        assertEquals(JobState.READY, f.jobs.snapshot.value.state)
+        assertIs<JobStartResult.Started>(f.jobs.start(laserOff = true))
+        f.waitForState(JobState.COMPLETED)
+    }
+
     @Test
     fun `progress estimates`() {
         val snapshot = JobSnapshot(

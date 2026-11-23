@@ -163,6 +163,14 @@ class SendResponseStreamingEngine(
                         )
                     }
 
+                    CommandResult.Reset -> {
+                        return fail(
+                            originalLineNumber,
+                            command,
+                            StreamingFailure.Reset
+                        )
+                    }
+
                     CommandResult.Disconnected -> {
                         return fail(
                             originalLineNumber,

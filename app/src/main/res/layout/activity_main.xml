@@ -112,6 +112,13 @@
             android:layout_height="match_parent"
             android:visibility="gone" />
 
+        <include
+            android:id="@+id/settingsPanel"
+            layout="@layout/view_settings_panel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+
     </FrameLayout>
 
     <LinearLayout
@@ -144,6 +151,15 @@
             android:layout_weight="1"
             android:drawableTop="@drawable/ic_terminal"
             android:text="CONSOLE" />
+
+        <TextView
+            android:id="@+id/tabSettings"
+            style="@style/LdTab"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:drawableTop="@drawable/ic_settings"
+            android:text="SETTINGS" />
 
     </LinearLayout>
 

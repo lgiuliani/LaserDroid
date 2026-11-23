@@ -70,11 +70,20 @@
             android:text="OPEN" />
 
         <TextView
+            android:id="@+id/buttonJobFrame"
+            style="@style/LdButton"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:drawableTop="@drawable/ic_frame"
+            android:text="FRAME" />
+
+        <TextView
             android:id="@+id/buttonJobStart"
             style="@style/LdButton.Primary"
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_weight="2"
+            android:layout_weight="1.5"
             android:drawableTop="@drawable/ic_play"
             android:text="START" />
 
