@@ -37,7 +37,7 @@ class ProgramCapture(
 
     /**
      * Appends one line. Returns false when the size limit is reached
-     * (the capture is then cancelled).
+     * (the capture is then canceled).
      */
     fun append(line: String): Boolean {
         val current = writer ?: begin()

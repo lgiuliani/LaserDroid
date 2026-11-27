@@ -15,7 +15,7 @@ sealed interface StreamingState {
     ) : StreamingState
 
     /**
-     * The streaming coroutine was cancelled (job stopped).
+     * The streaming coroutine was canceled (job stopped).
      * [lineNumber] is the last line sent, if any.
      */
     data class Cancelled(
@@ -30,4 +30,4 @@ sealed interface StreamingState {
         val command: String,
         val reason: StreamingFailure
     ) : StreamingState
-}
+}

@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Central arbiter of the machine (specification 3).
@@ -244,9 +245,7 @@ class MachineManager(
                 if (
                     event is ControllerEvent.SettingReceived
                 ) {
-                    _settings.value =
-                        _settings.value +
-                                (event.number to event.value)
+                    _settings.value += (event.number to event.value)
                 }
             }
         }
@@ -373,7 +372,7 @@ class MachineManager(
         }
 
         return controller.executeCommand(
-            "\$\$"
+            "$$"
         )
     }
 
@@ -386,7 +385,7 @@ class MachineManager(
         }
 
         return controller.executeCommand(
-            "\$I"
+            $$"$I"
         )
     }
 
@@ -402,7 +401,7 @@ class MachineManager(
 
         val result =
             controller.executeCommand(
-                "\$X"
+                $$"$X"
             )
 
         controller.requestStatus()
@@ -431,7 +430,7 @@ class MachineManager(
         }
 
         val timeout =
-            if (line.uppercase().startsWith("\$H")) {
+            if (line.uppercase().startsWith($$"$H")) {
                 HOMING_TIMEOUT_MILLIS
             } else {
                 CONSOLE_TIMEOUT_MILLIS
@@ -461,7 +460,7 @@ class MachineManager(
         backgroundPollJob =
             scope.launch {
                 while (isActive) {
-                    delay(BACKGROUND_POLL_MILLIS)
+                    delay(BACKGROUND_POLL_MILLIS.milliseconds)
                     // Jobs and framing poll by themselves.
                     if (!snapshot.value.jobActive) {
                         try {
@@ -603,7 +602,7 @@ class MachineManager(
         }
 
         controller.pause()
-        delay(300L)
+        delay(300L.milliseconds)
         controller.stop()
     }
 
@@ -873,7 +872,7 @@ class MachineManager(
 
         val result =
             controller.executeCommand(
-                "\$J=G21 G90 X${formatValue(x)} Y${formatValue(y)} F${formatValue(feedRate)}"
+                $$"$J=G21 G90 X$${formatValue(x)} Y$${formatValue(y)} F$${formatValue(feedRate)}"
             )
 
         if (result != CommandResult.Acknowledged) {
@@ -919,7 +918,7 @@ class MachineManager(
         )
 
         delay(
-            statusPollIntervalMillis
+            statusPollIntervalMillis.milliseconds
         )
 
         controller.requestStatus()
@@ -937,7 +936,7 @@ class MachineManager(
          * Allow physical movement to begin.
          */
         delay(
-            statusPollIntervalMillis
+            statusPollIntervalMillis.milliseconds
         )
 
         while (true) {
@@ -945,7 +944,7 @@ class MachineManager(
             controller.requestStatus()
 
             delay(
-                statusPollIntervalMillis
+                statusPollIntervalMillis.milliseconds
             )
 
             val currentSnapshot =
@@ -1094,4 +1093,4 @@ class MachineManager(
 
         scope.cancel()
     }
-}
+}

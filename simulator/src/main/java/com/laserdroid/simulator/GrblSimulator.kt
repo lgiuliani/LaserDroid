@@ -41,11 +41,11 @@ class GrblSimulator {
             normalizedCommand == "?" ->
                 "<Idle|MPos:0.000,0.000,0.000|FS:0,0>"
 
-            normalizedCommand == "\$\$" ->
+            normalizedCommand == $$"$$" ->
                 "ok"
 
             normalizedCommand.startsWith(
-                "\$J="
+                $$"$J="
             ) ->
                 "ok"
 

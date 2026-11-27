@@ -21,6 +21,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * LaserGRBL over Wi-Fi: Telnet (and optionally WebSocket) servers,
@@ -208,7 +209,7 @@ class RemoteManager(
         override fun start() {
             watchdog = scope.launch {
                 while (isActive) {
-                    delay(200L)
+                    delay(200L.milliseconds)
                     finishIfIdle()
                 }
             }

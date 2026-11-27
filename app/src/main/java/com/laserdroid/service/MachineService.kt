@@ -85,6 +85,15 @@ class MachineService : Service() {
         private const val LIBRARY_DIRECTORY = "library"
         private const val LOG_DIRECTORY = "logs"
         private const val WAKE_LOCK_TAG = "LaserDroid:job"
+        private const val REMOTE_WAKE_LOCK_TAG = "LaserDroid:remote-client"
+
+        /*
+         * CPU wakelocks always carry a timeout, so the OS reclaims
+         * them if the service dies without releasing. While still
+         * needed they are renewed well before expiry.
+         */
+        private const val WAKE_LOCK_TIMEOUT_MILLIS = 30 * 60_000L
+        private const val WAKE_LOCK_REFRESH_MILLIS = 10 * 60_000L
         private const val NOTIFICATION_MIN_INTERVAL_MILLIS = 1_000L
         private val PERCENT_SUFFIX = Regex(" [0-9.]+%$")
 
@@ -164,6 +173,8 @@ class MachineService : Service() {
 
     private lateinit var historyStore: JobHistoryStore
 
+    /* Guards jobWakeLock and remoteWakeLock. */
+    private val wakeLockGuard = Any()
     private var jobWakeLock: PowerManager.WakeLock? = null
 
     /* LASER button requests, applied in order (latest wins). */
@@ -231,6 +242,7 @@ class MachineService : Service() {
         observeJob()
         observeRemote()
         processPointerRequests()
+        refreshWakeLocks()
 
         logBook.info("LaserDroid service started.")
     }
@@ -632,19 +644,49 @@ class MachineService : Service() {
             releaseJobWakeLock()
             return
         }
-        if (jobWakeLock?.isHeld == true) return
-        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
-        jobWakeLock = powerManager
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG)
-            .apply {
-                setReferenceCounted(false)
-                acquire()
+        synchronized(wakeLockGuard) {
+            if (jobWakeLock == null) {
+                jobWakeLock = newCpuWakeLock(WAKE_LOCK_TAG)
             }
+        }
     }
 
     private fun releaseJobWakeLock() {
-        runCatching { jobWakeLock?.takeIf { it.isHeld }?.release() }
-        jobWakeLock = null
+        synchronized(wakeLockGuard) {
+            jobWakeLock.releaseQuietly()
+            jobWakeLock = null
+        }
+    }
+
+    /*
+     * Non reference-counted: acquire() on a held lock only pushes
+     * its timeout back, so renewing is safe.
+     */
+    private fun newCpuWakeLock(tag: String): PowerManager.WakeLock {
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        return powerManager
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, tag)
+            .apply {
+                setReferenceCounted(false)
+                acquire(WAKE_LOCK_TIMEOUT_MILLIS)
+            }
+    }
+
+    private fun PowerManager.WakeLock?.releaseQuietly() {
+        runCatching { this?.takeIf { it.isHeld }?.release() }
+    }
+
+    /* Renews the CPU wakelocks still wanted before they time out. */
+    private fun refreshWakeLocks() {
+        serviceScope.launch {
+            while (true) {
+                delay(WAKE_LOCK_REFRESH_MILLIS)
+                synchronized(wakeLockGuard) {
+                    jobWakeLock?.acquire(WAKE_LOCK_TIMEOUT_MILLIS)
+                    remoteWakeLock?.acquire(WAKE_LOCK_TIMEOUT_MILLIS)
+                }
+            }
+        }
     }
 
     /*
@@ -944,19 +986,15 @@ class MachineService : Service() {
             wifiLock = null
         }
 
-        if (status.clientConnected) {
-            if (remoteWakeLock?.isHeld != true) {
-                val powerManager = getSystemService(POWER_SERVICE) as PowerManager
-                remoteWakeLock = powerManager
-                    .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LaserDroid:remote-client")
-                    .apply {
-                        setReferenceCounted(false)
-                        acquire()
-                    }
+        synchronized(wakeLockGuard) {
+            if (status.clientConnected) {
+                if (remoteWakeLock == null) {
+                    remoteWakeLock = newCpuWakeLock(REMOTE_WAKE_LOCK_TAG)
+                }
+            } else {
+                remoteWakeLock.releaseQuietly()
+                remoteWakeLock = null
             }
-        } else {
-            runCatching { remoteWakeLock?.takeIf { it.isHeld }?.release() }
-            remoteWakeLock = null
         }
     }
 

@@ -89,12 +89,12 @@ class VirtualGrblSession(
 
         when {
             compact.isEmpty() -> ok()
-            compact == "\$\$" -> respond(info.settingsLines())
-            compact == "\$I" -> respond(info.buildInfoLines())
-            compact == "\$G" -> respond(listOf(info.parserStateLine()))
-            compact == "\$#" -> respond(info.parameterLines())
-            compact.startsWith("\$J=") -> send((relay?.jog(text) ?: REFUSED) + "\r\n")
-            compact == "\$X" -> send((relay?.unlock() ?: "ok") + "\r\n")
+            compact == $$"$$" -> respond(info.settingsLines())
+            compact == $$"$I" -> respond(info.buildInfoLines())
+            compact == $$"$G" -> respond(listOf(info.parserStateLine()))
+            compact == $$"$#" -> respond(info.parameterLines())
+            compact.startsWith($$"$J=") -> send((relay?.jog(text) ?: REFUSED) + "\r\n")
+            compact == $$"$X" -> send((relay?.unlock() ?: "ok") + "\r\n")
             compact.startsWith("$") -> {
                 log("Refused from LaserGRBL: $text")
                 send("$REFUSED\r\n")

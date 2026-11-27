@@ -103,11 +103,12 @@ object WorkshopCommands {
         if (state.feedRate > 0.0) commands += "F${format(state.feedRate)}"
 
         val power = if (laserOff) 0.0 else state.power
-        when {
+        commands += when {
             !laserOff && (state.spindle == 3 || state.spindle == 4) ->
-                commands += "M${state.spindle} S${format(power)}"
+                "M${state.spindle} S${format(power)}"
+
             else ->
-                commands += "S${format(power)}"
+                "S${format(power)}"
         }
         if (state.motionMode == 0 || state.motionMode == 1) {
             commands += "G${state.motionMode}"

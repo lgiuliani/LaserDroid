@@ -5,11 +5,13 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.util.AttributeSet
+import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.withMatrix
 import com.laserdroid.R
 import com.laserdroid.core.gcode.GCodeAnalysis
 import com.laserdroid.core.gcode.GCodePreviewPath
@@ -103,7 +105,9 @@ class GCodePreviewView @JvmOverloads constructor(
 
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = themeColor(R.color.ld_text_secondary)
-        textSize = 11f * resources.displayMetrics.scaledDensity
+        textSize = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_SP, 11f, resources.displayMetrics
+        )
     }
 
     private fun hairline(value: Int): Paint {
@@ -299,15 +303,12 @@ class GCodePreviewView @JvmOverloads constructor(
             return
         }
 
-        canvas.save()
-        canvas.concat(drawMatrix)
-
-        drawMachineArea(canvas)
-        drawGroup(canvas, rapid, rapidPaint)
-        drawGroup(canvas, travel, travelPaint)
-        drawGroup(canvas, work, workPaint)
-
-        canvas.restore()
+        canvas.withMatrix(drawMatrix) {
+            drawMachineArea(this)
+            drawGroup(this, rapid, rapidPaint)
+            drawGroup(this, travel, travelPaint)
+            drawGroup(this, work, workPaint)
+        }
 
         drawMarkers(canvas)
     }
@@ -365,6 +366,12 @@ class GCodePreviewView @JvmOverloads constructor(
         parent?.requestDisallowInterceptTouchEvent(true)
         scaleDetector.onTouchEvent(event)
         gestureDetector.onTouchEvent(event)
+        if (event.actionMasked == MotionEvent.ACTION_UP) {
+            performClick()
+        }
         return true
     }
+
+    /* Accessibility services trigger clicks through this. */
+    override fun performClick(): Boolean = super.performClick()
 }

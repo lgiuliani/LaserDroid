@@ -178,8 +178,8 @@ class GCodeAnalyzer(
         private fun processSystemCommand(lineNumber: Long, command: String) {
             val upper = command.uppercase()
             val severity =
-                if (upper.startsWith("\$H") || upper.startsWith("\$J") ||
-                    upper.startsWith("\$X") || upper.startsWith("\$C")
+                if (upper.startsWith($$"$H") || upper.startsWith($$"$J") ||
+                    upper.startsWith($$"$X") || upper.startsWith($$"$C")
                 ) {
                     GCodeWarningSeverity.WARNING
                 } else {
@@ -259,15 +259,15 @@ class GCodeAnalyzer(
             var linePower: Double? = null
 
             // First pass: modal changes that affect values (units, mode).
-            for (word in words) {
-                when (word.letter) {
+            for ((letter, value) in words) {
+                when (letter) {
                     'G' -> {
-                        val code = (word.value * 10.0).roundToInt()
+                        val code = (value * 10.0).roundToInt()
                         if (code !in SUPPORTED_G_CODES) {
                             warn(
                                 lineNumber,
                                 GCodeWarningSeverity.WARNING,
-                                "Unsupported G${formatCode(word.value)} (kept, GRBL may reject it)"
+                                "Unsupported G${formatCode(value)} (kept, GRBL may reject it)"
                             )
                         }
                         when (code) {
@@ -285,7 +285,7 @@ class GCodeAnalyzer(
                                 warn(
                                     lineNumber,
                                     GCodeWarningSeverity.WARNING,
-                                    "G${formatCode(word.value)} changes positions/offsets: preview may be inaccurate"
+                                    "G${formatCode(value)} changes positions/offsets: preview may be inaccurate"
                                 )
                             }
                             530 -> warn(
@@ -313,12 +313,12 @@ class GCodeAnalyzer(
                         }
                     }
                     'M' -> {
-                        val code = word.value.roundToInt()
+                        val code = value.roundToInt()
                         if (code !in SUPPORTED_M_CODES) {
                             warn(
                                 lineNumber,
                                 GCodeWarningSeverity.WARNING,
-                                "Unsupported M${formatCode(word.value)} (kept, GRBL may reject it)"
+                                "Unsupported M${formatCode(value)} (kept, GRBL may reject it)"
                             )
                         }
                         when (code) {
@@ -326,14 +326,14 @@ class GCodeAnalyzer(
                             5, 2, 30 -> laserOn = false
                         }
                     }
-                    'F' -> lineFeed = word.value
-                    'S' -> linePower = word.value
-                    'X' -> xWord = word.value
-                    'Y' -> yWord = word.value
-                    'I' -> iWord = word.value
-                    'J' -> jWord = word.value
-                    'R' -> rWord = word.value
-                    'P' -> pWord = word.value
+                    'F' -> lineFeed = value
+                    'S' -> linePower = value
+                    'X' -> xWord = value
+                    'Y' -> yWord = value
+                    'I' -> iWord = value
+                    'J' -> jWord = value
+                    'R' -> rWord = value
+                    'P' -> pWord = value
                 }
             }
 

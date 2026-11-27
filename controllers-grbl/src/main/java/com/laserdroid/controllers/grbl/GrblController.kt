@@ -25,6 +25,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * GRBL 1.1 driver over a [SerialTransport].
@@ -292,7 +293,7 @@ class GrblController(
         while (true) {
 
             val result =
-                withTimeoutOrNull(RESPONSE_POLL_MILLIS) {
+                withTimeoutOrNull(RESPONSE_POLL_MILLIS.milliseconds) {
                     response.await()
                 }
 
@@ -685,4 +686,4 @@ class GrblController(
         pendingCommand = null
         scope.cancel()
     }
-}
+}

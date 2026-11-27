@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import com.laserdroid.MainActivity
 
 /**
@@ -24,9 +25,7 @@ class BootReceiver : BroadcastReceiver() {
 
         fun setStartOnBoot(context: Context, enabled: Boolean) {
             context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-                .edit()
-                .putBoolean(KEY_START_ON_BOOT, enabled)
-                .apply()
+                .edit { putBoolean(KEY_START_ON_BOOT, enabled) }
         }
 
         private fun isStartOnBoot(context: Context): Boolean =

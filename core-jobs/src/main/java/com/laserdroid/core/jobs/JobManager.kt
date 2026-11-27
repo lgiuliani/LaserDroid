@@ -38,6 +38,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Configuration of [JobManager].
@@ -498,7 +499,7 @@ class JobManager(
         runCatching {
             if (!immediate) {
                 activeController.pause()
-                withTimeoutOrNull(config.stopHoldTimeoutMillis) {
+                withTimeoutOrNull(config.stopHoldTimeoutMillis.milliseconds) {
                     activeController.machineState.first {
                         it == MachineState.Hold ||
                                 it == MachineState.Idle ||
@@ -519,7 +520,7 @@ class JobManager(
          * UI does not keep showing Hold.
          */
         scope.launch {
-            delay(config.stopHoldTimeoutMillis / 3)
+            delay((config.stopHoldTimeoutMillis / 3).milliseconds)
             runCatching { activeController.requestStatus() }
         }
         true
@@ -684,7 +685,7 @@ class JobManager(
         transition(JobState.COMPLETING)
 
         // Make sure at least one fresh status report was received.
-        delay(config.statusPollMillis * 2)
+        delay((config.statusPollMillis * 2).milliseconds)
 
         val finalState = activeController.machineState.first { state ->
             state == MachineState.Idle ||
@@ -720,7 +721,7 @@ class JobManager(
             } catch (exception: Exception) {
                 // Write failure: the streaming engine reports it.
             }
-            delay(config.statusPollMillis)
+            delay(config.statusPollMillis.milliseconds)
         }
     }
 

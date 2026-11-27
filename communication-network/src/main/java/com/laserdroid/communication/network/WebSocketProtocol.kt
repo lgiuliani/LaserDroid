@@ -98,7 +98,7 @@ object WebSocketProtocol {
             repeat(8) { length = (length shl 8) or readByte(input).toLong() }
         }
         // A 64-bit length with the high bit set is negative.
-        if (length < 0L || length > MAX_PAYLOAD) throw IOException("Invalid frame length: $length")
+        if (length !in 0L..MAX_PAYLOAD) throw IOException("Invalid frame length: $length")
 
         val mask = if (masked) ByteArray(4) { readByte(input).toByte() } else null
         val payload = ByteArray(length.toInt())
