@@ -40,6 +40,8 @@ import com.laserdroid.core.machine.MachineEvent
 import com.laserdroid.core.machine.MachineManager
 import com.laserdroid.core.machine.MachineOperationResult
 import com.laserdroid.core.machine.MachineSnapshot
+import com.laserdroid.core.remote.RemoteMode
+import com.laserdroid.core.remote.RemoteStatus
 import com.laserdroid.service.AppSettings
 import com.laserdroid.service.JobHistoryEntry
 import com.laserdroid.service.LogLevel
@@ -124,6 +126,14 @@ class MainActivity : Activity() {
     private lateinit var logLevelChips: ChoiceChipsView
     private lateinit var soundsSwitch: CompoundButton
     private lateinit var aboutText: TextView
+    private lateinit var remoteSwitch: CompoundButton
+    private lateinit var remoteModeChips: ChoiceChipsView
+    private lateinit var remoteModeHelp: TextView
+    private lateinit var remoteWebSocketSwitch: CompoundButton
+    private lateinit var remoteRelaySwitch: CompoundButton
+    private lateinit var remotePauseSwitch: CompoundButton
+    private lateinit var remoteInfoText: TextView
+    private lateinit var remoteBadgeText: TextView
     private lateinit var logText: TextView
     private lateinit var logScrollView: ScrollView
     private lateinit var commandInput: EditText
@@ -150,6 +160,7 @@ class MainActivity : Activity() {
     private var logJob: Job? = null
     private var settingsJob: Job? = null
     private var framingStateJob: Job? = null
+    private var remoteJob: Job? = null
 
     /* Suppresses listeners while settings are displayed. */
     private var displayingSettings = false
@@ -277,6 +288,14 @@ class MainActivity : Activity() {
         logLevelChips = findViewById(R.id.chipsLogLevel)
         soundsSwitch = findViewById(R.id.switchSounds)
         aboutText = findViewById(R.id.textAbout)
+        remoteSwitch = findViewById(R.id.switchRemote)
+        remoteModeChips = findViewById(R.id.chipsRemoteMode)
+        remoteModeHelp = findViewById(R.id.textRemoteModeHelp)
+        remoteWebSocketSwitch = findViewById(R.id.switchRemoteWebSocket)
+        remoteRelaySwitch = findViewById(R.id.switchRemoteRelay)
+        remotePauseSwitch = findViewById(R.id.switchRemotePause)
+        remoteInfoText = findViewById(R.id.textRemoteInfo)
+        remoteBadgeText = findViewById(R.id.textRemoteBadge)
         logText = findViewById(R.id.textLog)
         logScrollView = findViewById(R.id.logScrollView)
         commandInput = findViewById(R.id.editCommand)
@@ -468,6 +487,7 @@ class MainActivity : Activity() {
         observeJob(service)
         observeServiceLog(service)
         observeSettings(service)
+        observeRemote(service)
 
         /*
          * After a rotation the backend already exists:
@@ -522,6 +542,8 @@ class MainActivity : Activity() {
         settingsJob = null
         framingStateJob?.cancel()
         framingStateJob = null
+        remoteJob?.cancel()
+        remoteJob = null
     }
 
     private fun requireMachineManager(): MachineManager? {
@@ -1355,6 +1377,38 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.buttonTestSound).setOnClickListener {
             machineService?.playTestSound()
         }
+        remoteModeChips.setChoices(listOf(0.0, 1.0), 0.0) { value ->
+            if (value == 0.0) "RECEIVE" else "BRIDGE"
+        }
+        remoteModeChips.onValueSelected = { value ->
+            val mode = if (value == 0.0) RemoteMode.RECEPTION else RemoteMode.BRIDGE
+            machineService?.updateSettings { it.copy(remoteMode = mode) }
+        }
+        remoteSwitch.setOnCheckedChangeListener { _, checked ->
+            if (!displayingSettings) {
+                machineService?.updateSettings { it.copy(remoteEnabled = checked) }
+            }
+        }
+        remoteWebSocketSwitch.setOnCheckedChangeListener { _, checked ->
+            if (!displayingSettings) {
+                machineService?.updateSettings { it.copy(remoteWebSocket = checked) }
+            }
+        }
+        remoteRelaySwitch.setOnCheckedChangeListener { _, checked ->
+            if (!displayingSettings) {
+                machineService?.updateSettings { it.copy(remoteRelay = checked) }
+            }
+        }
+        remotePauseSwitch.setOnCheckedChangeListener { _, checked ->
+            if (!displayingSettings) {
+                machineService?.updateSettings { it.copy(remotePauseOnLoss = checked) }
+            }
+        }
+        findViewById<View>(R.id.buttonRemoteDisconnect).setOnClickListener {
+            machineService?.disconnectRemoteClient()
+        }
+        remoteBadgeText.setOnClickListener { showPage(PAGE_SETTINGS) }
+
         findViewById<View>(R.id.buttonHistory).setOnClickListener { showHistoryDialog() }
         findViewById<View>(R.id.buttonLibrary).setOnClickListener { showOpenDialog() }
     }
@@ -1374,11 +1428,90 @@ class MainActivity : Activity() {
         pointerPowerChips.selectValue(settings.pointerPowerPercent)
         logLevelChips.selectValue(settings.logLevel.ordinal.toDouble())
         soundsSwitch.isChecked = settings.soundsEnabled
+        remoteSwitch.isChecked = settings.remoteEnabled
+        remoteModeChips.selectValue(if (settings.remoteMode == RemoteMode.RECEPTION) 0.0 else 1.0)
+        remoteWebSocketSwitch.isChecked = settings.remoteWebSocket
+        remoteRelaySwitch.isChecked = settings.remoteRelay
+        remotePauseSwitch.isChecked = settings.remotePauseOnLoss
         displayingSettings = false
+
+        remoteModeHelp.text =
+            if (settings.remoteMode == RemoteMode.RECEPTION) {
+                "RECEIVE: LaserGRBL sends the program, LaserDroid stores it (JOB, READY). " +
+                        "You start and follow the job on the phone."
+            } else {
+                "BRIDGE: LaserGRBL drives the machine through the phone. " +
+                        "Phone controls are locked while the PC is connected."
+            }
+        remoteRelaySwitch.isEnabled = settings.remoteMode == RemoteMode.RECEPTION
+        remotePauseSwitch.isEnabled = settings.remoteMode == RemoteMode.BRIDGE
 
         jogPanel.setLaserPointerPercent(settings.pointerPowerPercent)
         aboutText.text = "Log file: ${service.logBook.currentFile.absolutePath}\n" +
                 "Library: ${File(filesDir, "library").absolutePath}"
+    }
+
+    /*
+     * ----------------------------------------------------
+     * LASERGRBL OVER WI-FI
+     * ----------------------------------------------------
+     */
+
+    private var programsReceivedSeen = -1
+
+    private fun observeRemote(service: MachineService) {
+        remoteJob?.cancel()
+        remoteJob =
+            activityScope.launch {
+                service.remoteStatus.collect { status ->
+                    renderRemote(service, status)
+                    // New program from LaserGRBL: show it.
+                    if (programsReceivedSeen >= 0 && status.programsReceived > programsReceivedSeen) {
+                        showPage(PAGE_JOB)
+                    }
+                    programsReceivedSeen = status.programsReceived
+                }
+            }
+    }
+
+    private fun renderRemote(service: MachineService, status: RemoteStatus) {
+        if (!status.enabled) {
+            remoteBadgeText.visibility = View.GONE
+            remoteInfoText.text = "Server off."
+            return
+        }
+
+        val (label, color) = when {
+            status.receiving -> "RX ${status.linesReceived}" to R.color.ld_accent
+            status.clientConnected -> (if (status.mode == RemoteMode.BRIDGE) "PC BRIDGE" else "PC") to
+                    R.color.ld_state_idle
+            else -> "PC" to R.color.ld_state_offline
+        }
+        remoteBadgeText.visibility = View.VISIBLE
+        remoteBadgeText.text = label
+        remoteBadgeText.backgroundTintList =
+            ColorStateList.valueOf(ContextCompat.getColor(this, color))
+
+        val addresses = service.localIpAddresses().ifEmpty { listOf("(no Wi-Fi)") }
+        remoteInfoText.text = buildString {
+            append("In LaserGRBL, connection type:\n")
+            addresses.forEach { address ->
+                status.telnetPort?.let { append("  Telnet          $address:$it\n") }
+                status.webSocketPort?.let { append("  LaserWebESP8266 ws://$address:$it/\n") }
+            }
+            status.error?.let { append("Error: $it\n") }
+            append("\n")
+            if (status.clientConnected) {
+                append("PC: ${status.clientAddress} (${status.clientProtocol})\n")
+                append("Received: ${status.bytesReceived / 1024} KB")
+                if (status.receiving) append(", ${status.linesReceived} lines in progress")
+            } else {
+                append("Waiting for LaserGRBL...")
+            }
+            if (status.programsReceived > 0) {
+                append("\nPrograms received: ${status.programsReceived}")
+            }
+        }
     }
 
     /*

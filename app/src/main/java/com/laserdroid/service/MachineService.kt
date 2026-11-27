@@ -12,6 +12,7 @@ import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -38,7 +39,18 @@ import com.laserdroid.core.machine.MachineEvent
 import com.laserdroid.core.machine.MachineManager
 import com.laserdroid.core.machine.MachineOperationResult
 import com.laserdroid.core.machine.MachineSnapshot
+import com.laserdroid.core.remote.CapturedProgram
+import com.laserdroid.core.remote.MachineInfoProvider
+import com.laserdroid.core.remote.MachineRelay
+import com.laserdroid.core.remote.RawMachineLink
+import com.laserdroid.core.remote.RemoteConfig
+import com.laserdroid.core.remote.RemoteManager
+import com.laserdroid.core.remote.RemoteStatus
 import java.io.File
+import java.net.Inet4Address
+import java.net.NetworkInterface
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,7 +61,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -73,6 +87,11 @@ class MachineService : Service() {
 
         /* The LASER button never stays on longer than this. */
         private const val POINTER_MAX_MILLIS = 30_000L
+
+        /* LaserGRBL over Wi-Fi (ports >= 1024: no root needed). */
+        const val TELNET_PORT = 2323
+        const val WEBSOCKET_PORT = 8181
+        private const val REMOTE_DIRECTORY = "remote"
     }
 
     inner class LocalBinder : Binder() {
@@ -114,6 +133,10 @@ class MachineService : Service() {
     /* Firmware identification ([VER:...]) for the history. */
     private var firmwareVersion: String? = null
 
+    /* [VER:...] / [OPT:...] lines, returned to LaserGRBL ($I). */
+    @Volatile
+    private var cachedBuildInfo: List<String> = emptyList()
+
     /*
      * ----------------------------------------------------
      * JOBS, LOGS, SOUNDS, SETTINGS, HISTORY
@@ -145,6 +168,14 @@ class MachineService : Service() {
     private var pointerWatchdog: Job? = null
 
     private var framingJob: Job? = null
+
+    /* LaserGRBL over Wi-Fi. */
+    private lateinit var remoteManager: RemoteManager
+    private var wifiLock: WifiManager.WifiLock? = null
+    private var remoteWakeLock: PowerManager.WakeLock? = null
+
+    val remoteStatus: StateFlow<RemoteStatus>
+        get() = remoteManager.status
 
     /*
      * ----------------------------------------------------
@@ -184,8 +215,18 @@ class MachineService : Service() {
             createNotification("LaserDroid", "Machine service ready")
         )
 
+        remoteManager = RemoteManager(
+            info = remoteMachineInfo,
+            relay = remoteRelay,
+            link = remoteLink,
+            captureDirectory = File(cacheDir, REMOTE_DIRECTORY),
+            onProgramReceived = { program -> onRemoteProgram(program) },
+            log = { message -> logBook.info(message) }
+        )
+
         observeSettings()
         observeJob()
+        observeRemote()
         processPointerRequests()
 
         logBook.info("LaserDroid service started.")
@@ -195,6 +236,8 @@ class MachineService : Service() {
 
     override fun onDestroy() {
         runCatching { unregisterReceiver(usbDetachReceiver) }
+        remoteManager.close()
+        releaseRemoteLocks()
         closeMachineBackend("Service stopped")
         releaseJobWakeLock()
         jobManager.close()
@@ -237,6 +280,16 @@ class MachineService : Service() {
             settings.collect { value ->
                 logBook.level = value.logLevel
                 soundPlayer.enabled = value.soundsEnabled
+                remoteManager.apply(
+                    RemoteConfig(
+                        enabled = value.remoteEnabled,
+                        mode = value.remoteMode,
+                        telnetPort = TELNET_PORT,
+                        webSocketEnabled = value.remoteWebSocket,
+                        webSocketPort = WEBSOCKET_PORT,
+                        relayEnabled = value.remoteRelay
+                    )
+                )
             }
         }
     }
@@ -299,6 +352,8 @@ class MachineService : Service() {
             if (settingsResult != CommandResult.Acknowledged) {
                 logBook.warning("GRBL settings not read: $settingsResult")
             }
+            // $I: firmware identification (history, LaserGRBL).
+            runCatching { manager.requestBuildInfo() }
             Unit
         }.onSuccess {
             logBook.info("Machine connected.")
@@ -343,6 +398,11 @@ class MachineService : Service() {
     private fun closeMachineBackend(reason: String) {
         // An active job becomes DISCONNECTED, never resumed automatically.
         jobManager.detachMachine(reason)
+
+        // A bridged PC loses its machine.
+        if (remoteBridgeActive) {
+            remoteManager.disconnectClient()
+        }
 
         pointerWatchdog?.cancel()
         framingJob?.cancel()
@@ -421,6 +481,10 @@ class MachineService : Service() {
                     is ControllerEvent.MessageReceived -> {
                         if (event.message.startsWith("[VER:")) {
                             firmwareVersion = event.message.removePrefix("[VER:").removeSuffix("]")
+                            cachedBuildInfo = listOf(event.message)
+                        } else if (event.message.startsWith("[OPT:")) {
+                            cachedBuildInfo = cachedBuildInfo.filter { it.startsWith("[VER:") } +
+                                    event.message
                         }
                         logBook.info(event.message)
                     }
@@ -692,6 +756,225 @@ class MachineService : Service() {
         }
         return result
     }
+
+    /*
+     * ----------------------------------------------------
+     * LASERGRBL OVER WI-FI
+     * ----------------------------------------------------
+     */
+
+    @Volatile
+    private var remoteBridgeActive = false
+
+    /* Cached real values returned to LaserGRBL (RECEPTION). */
+    private val remoteMachineInfo = object : MachineInfoProvider {
+
+        override fun banner(): String {
+            // "[VER:1.1h.20190825:]" -> "1.1h"
+            val version = cachedBuildInfo
+                .firstOrNull { it.startsWith("[VER:") }
+                ?.removePrefix("[VER:")
+                ?.split('.')
+                ?.take(2)
+                ?.joinToString(".")
+                ?.takeIf { it.isNotEmpty() }
+                ?: "1.1h"
+            return "Grbl $version ['\$' for help]"
+        }
+
+        override fun settingsLines(): List<String> =
+            machineManager?.settings?.value
+                ?.toSortedMap()
+                ?.map { (number, value) -> "\$$number=$value" }
+                .orEmpty()
+
+        override fun buildInfoLines(): List<String> =
+            cachedBuildInfo.ifEmpty { listOf("[VER:1.1h.LaserDroid:]", "[OPT:V,15,128]") }
+
+        override fun parserStateLine(): String =
+            "[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]"
+
+        override fun parameterLines(): List<String> {
+            val offset = workCoordinateOffset
+            val zero = "0.000,0.000,0.000"
+            return listOf(
+                "[G54:${formatTriple(offset)}]",
+                "[G55:$zero]", "[G56:$zero]", "[G57:$zero]", "[G58:$zero]", "[G59:$zero]",
+                "[G28:$zero]", "[G30:$zero]", "[G92:$zero]", "[TLO:0.000]", "[PRB:$zero:0]"
+            )
+        }
+
+        override fun statusReport(state: String): String {
+            val position = snapshot.value.position
+            return "<$state|MPos:${formatTriple(position)}|FS:0,0|WCO:${formatTriple(workCoordinateOffset)}>"
+        }
+    }
+
+    /* Manual commands from LaserGRBL (RECEPTION, if enabled). */
+    private val remoteRelay = object : MachineRelay {
+
+        override suspend fun jog(line: String): String =
+            toGrblAnswer(machineManager?.relayJog(line))
+
+        override suspend fun cancelJog() {
+            runCatching { machineManager?.cancelJog() }
+        }
+
+        override suspend fun unlock(): String =
+            toGrblAnswer(machineManager?.unlock())
+
+        override fun liveState(): String? =
+            when (machineManager?.snapshot?.value?.machineState) {
+                MachineState.Jog -> "Jog"
+                else -> null
+            }
+
+        private fun toGrblAnswer(result: CommandResult?): String =
+            when (result) {
+                CommandResult.Acknowledged -> "ok"
+                is CommandResult.Rejected -> "error:${result.code ?: 9}"
+                else -> "error:9"
+            }
+    }
+
+    /* Raw serial access (BRIDGE). */
+    private val remoteLink = object : RawMachineLink {
+
+        override val incoming: Flow<ByteArray>
+            get() = usbTransport?.incomingData ?: emptyFlow()
+
+        override fun acquire(): String? {
+            val activeManager = machineManager ?: return "machine not connected"
+            if (jobSnapshot.value.state.isActive) return "a job is running on LaserDroid"
+            if (!activeManager.beginRemoteControl()) return "machine busy"
+            remoteBridgeActive = true
+            logBook.warning("BRIDGE: LaserGRBL drives the machine. Phone controls locked.")
+            return null
+        }
+
+        override suspend fun write(data: ByteArray) {
+            usbTransport?.write(data) ?: throw IllegalStateException("USB not connected")
+        }
+
+        override suspend fun release(clientLost: Boolean) {
+            val activeManager = machineManager
+            val state = activeManager?.snapshot?.value?.machineState
+            if (
+                clientLost &&
+                settings.value.remotePauseOnLoss &&
+                (state == MachineState.Running || state == MachineState.Jog)
+            ) {
+                runCatching { usbTransport?.write("!".toByteArray()) }
+                logBook.warning("PC lost while moving: feed hold sent (RESET or ~ from the console).")
+                soundPlayer.play(SoundPlayer.Sound.WARNING)
+            }
+            remoteBridgeActive = false
+            activeManager?.endJob()
+            logBook.info("BRIDGE released: phone controls available.")
+        }
+    }
+
+    private fun observeRemote() {
+        serviceScope.launch {
+            var wasConnected = false
+            remoteManager.status.collect { status ->
+                updateRemoteLocks(status)
+                if (status.clientConnected != wasConnected) {
+                    wasConnected = status.clientConnected
+                    soundPlayer.play(
+                        if (status.clientConnected) SoundPlayer.Sound.CONNECT
+                        else SoundPlayer.Sound.DISCONNECT
+                    )
+                }
+            }
+        }
+    }
+
+    /*
+     * Wi-Fi kept in high performance mode while the servers run,
+     * CPU kept awake while a PC is connected.
+     */
+    private fun updateRemoteLocks(status: RemoteStatus) {
+        if (status.enabled) {
+            if (wifiLock?.isHeld != true) {
+                val wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+                @Suppress("DEPRECATION")
+                wifiLock = wifiManager
+                    .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "LaserDroid:remote")
+                    .apply {
+                        setReferenceCounted(false)
+                        acquire()
+                    }
+            }
+        } else {
+            runCatching { wifiLock?.takeIf { it.isHeld }?.release() }
+            wifiLock = null
+        }
+
+        if (status.clientConnected) {
+            if (remoteWakeLock?.isHeld != true) {
+                val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+                remoteWakeLock = powerManager
+                    .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LaserDroid:remote-client")
+                    .apply {
+                        setReferenceCounted(false)
+                        acquire()
+                    }
+            }
+        } else {
+            runCatching { remoteWakeLock?.takeIf { it.isHeld }?.release() }
+            remoteWakeLock = null
+        }
+    }
+
+    private fun releaseRemoteLocks() {
+        updateRemoteLocks(RemoteStatus())
+    }
+
+    /*
+     * Program received from LaserGRBL: stored in the library and
+     * loaded (READY). Never started automatically.
+     */
+    private suspend fun onRemoteProgram(program: CapturedProgram) {
+        val name = "lasergrbl_" +
+                SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".nc"
+        val target = File(libraryDirectory, name)
+        val moved = withContext(Dispatchers.IO) {
+            program.file.renameTo(target) ||
+                    runCatching { program.file.copyTo(target, overwrite = true); program.file.delete() }.isSuccess
+        }
+        if (!moved) {
+            logBook.error("Received program could not be saved.")
+            return
+        }
+        soundPlayer.play(SoundPlayer.Sound.RECEIVED)
+        logBook.info("LaserGRBL program saved: $name (${program.lines} lines)")
+
+        if (jobSnapshot.value.state.isActive) {
+            logBook.warning("A job is running: $name kept in the library.")
+            return
+        }
+        loadLibraryFile(target)
+    }
+
+    /** IPv4 addresses of this phone (Wi-Fi, hotspot). */
+    fun localIpAddresses(): List<String> {
+        return runCatching {
+            NetworkInterface.getNetworkInterfaces().toList()
+                .filter { it.isUp && !it.isLoopback }
+                .flatMap { network -> network.inetAddresses.toList() }
+                .filterIsInstance<Inet4Address>()
+                .filter { !it.isLoopbackAddress }
+                .mapNotNull { it.hostAddress }
+        }.getOrDefault(emptyList())
+    }
+
+    fun disconnectRemoteClient() {
+        remoteManager.disconnectClient()
+    }
+
+    private fun formatTriple(position: MachinePosition): String =
+        String.format(Locale.US, "%.3f,%.3f,%.3f", position.x, position.y, position.z)
 
     /*
      * ----------------------------------------------------

@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!-- Settings page (portrait and landscape). -->
+
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="6dp">
+
+        <TextView
+            style="@style/LdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="10dp"
+            android:text="FRAMING LASER POWER (% of $30)" />
+
+        <com.laserdroid.ui.common.ChoiceChipsView
+            android:id="@+id/chipsFramingPower"
+            android:layout_width="match_parent"
+            android:layout_height="46dp" />
+
+        <TextView
+            style="@style/LdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="10dp"
+            android:text="FRAMING SPEED (mm/min)" />
+
+        <com.laserdroid.ui.common.ChoiceChipsView
+            android:id="@+id/chipsFramingFeed"
+            android:layout_width="match_parent"
+            android:layout_height="46dp" />
+
+        <TextView
+            style="@style/LdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="10dp"
+            android:text="LASER BUTTON POWER (% of $30)" />
+
+        <com.laserdroid.ui.common.ChoiceChipsView
+            android:id="@+id/chipsPointerPower"
+            android:layout_width="match_parent"
+            android:layout_height="46dp" />
+
+        <TextView
+            style="@style/LdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="10dp"
+            android:text="LOG LEVEL" />
+
+        <com.laserdroid.ui.common.ChoiceChipsView
+            android:id="@+id/chipsLogLevel"
+            android:layout_width="match_parent"
+            android:layout_height="46dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <Switch
+                android:id="@+id/switchSounds"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="2"
+                android:paddingStart="6dp"
+                android:text="Notification sounds"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/buttonTestSound"
+                style="@style/LdButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:drawableStart="@drawable/ic_volume"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:text="TEST" />
+
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/buttonHistory"
+                style="@style/LdButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_history"
+                android:text="HISTORY" />
+
+            <TextView
+                android:id="@+id/buttonLibrary"
+                style="@style/LdButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_folder_open"
+                android:text="LIBRARY" />
+
+        </LinearLayout>
+
+        <TextView
+            style="@style/LdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="14dp"
+            android:text="LASERGRBL OVER WI-FI" />
+
+        <Switch
+            android:id="@+id/switchRemote"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:paddingStart="6dp"
+            android:text="LaserGRBL server (Telnet 2323)"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <com.laserdroid.ui.common.ChoiceChipsView
+            android:id="@+id/chipsRemoteMode"
+            android:layout_width="match_parent"
+            android:layout_height="46dp" />
+
+        <TextView
+            android:id="@+id/textRemoteModeHelp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="6dp"
+            android:paddingBottom="4dp"
+            android:textColor="@color/ld_text_secondary"
+            android:textSize="11sp" />
+
+        <Switch
+            android:id="@+id/switchRemoteWebSocket"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:paddingStart="6dp"
+            android:text="Also WebSocket 8181 (LaserWebESP8266)"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <Switch
+            android:id="@+id/switchRemoteRelay"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:paddingStart="6dp"
+            android:text="Relay Jog / Unlock from LaserGRBL"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <Switch
+            android:id="@+id/switchRemotePause"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:paddingStart="6dp"
+            android:text="Bridge: feed hold if the PC is lost"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/textRemoteInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_input"
+            android:padding="8dp"
+            android:textColor="@color/ld_text"
+            android:textSize="13sp"
+            android:typeface="monospace" />
+
+        <TextView
+            android:id="@+id/buttonRemoteDisconnect"
+            style="@style/LdButton"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:drawableStart="@drawable/ic_close"
+            android:paddingStart="24dp"
+            android:paddingEnd="48dp"
+            android:text="DISCONNECT PC" />
+
+        <TextView
+            android:id="@+id/textAbout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="4dp"
+            android:paddingTop="12dp"
+            android:textColor="@color/ld_text_secondary"
+            android:textSize="11sp"
+            android:typeface="monospace" />
+
+    </LinearLayout>
+
+</ScrollView>

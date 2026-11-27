@@ -11,12 +11,14 @@
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/app" />
             <option value="$PROJECT_DIR$/communication-api" />
+            <option value="$PROJECT_DIR$/communication-network" />
             <option value="$PROJECT_DIR$/communication-usb" />
             <option value="$PROJECT_DIR$/controllers-api" />
             <option value="$PROJECT_DIR$/controllers-grbl" />
             <option value="$PROJECT_DIR$/core-gcode" />
             <option value="$PROJECT_DIR$/core-jobs" />
             <option value="$PROJECT_DIR$/core-machine" />
+            <option value="$PROJECT_DIR$/core-remote" />
             <option value="$PROJECT_DIR$/core-streaming" />
             <option value="$PROJECT_DIR$/simulator" />
           </set>

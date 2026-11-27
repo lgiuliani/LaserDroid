@@ -136,6 +136,53 @@ class MachineManager(
     }
 
     /**
+     * Exclusive control for a remote program (LaserGRBL bridge):
+     * like a job, but allowed in any connected state (Alarm
+     * included) so that LaserGRBL can unlock the machine.
+     */
+    fun beginRemoteControl(): Boolean {
+
+        while (true) {
+
+            val current =
+                _snapshot.value
+
+            if (
+                current.jobActive ||
+                current.machineState == MachineState.Disconnected ||
+                current.machineState == MachineState.Connecting
+            ) {
+                return false
+            }
+
+            if (
+                _snapshot.compareAndSet(
+                    current,
+                    current.copy(
+                        jobActive = true
+                    )
+                )
+            ) {
+                return true
+            }
+        }
+    }
+
+    /**
+     * Jog line relayed from LaserGRBL ($J=...). Refused during a job.
+     */
+    suspend fun relayJog(
+        line: String
+    ): CommandResult {
+
+        if (!snapshot.value.canJog) {
+            return CommandResult.Rejected(code = null)
+        }
+
+        return controller.executeCommand(line)
+    }
+
+    /**
      * Releases the machine after a job has ended.
      */
     fun endJob() {
