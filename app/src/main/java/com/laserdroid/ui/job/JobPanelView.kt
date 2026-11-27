@@ -34,6 +34,7 @@ class JobPanelView @JvmOverloads constructor(
     var onResumeRequested: (() -> Unit)? = null
     var onStopRequested: (() -> Unit)? = null
     var onFrameRequested: (() -> Unit)? = null
+    var onCenterRequested: (() -> Unit)? = null
 
     private val preview: GCodePreviewView
     private val infoText: TextView
@@ -43,6 +44,8 @@ class JobPanelView @JvmOverloads constructor(
     private val openButton: View
     private val startButton: TextView
     private val frameButton: View
+    private val centerButton: View
+    private val airSwitch: CompoundButton
     private val pauseButton: View
     private val resumeButton: View
     private val stopButton: View
@@ -65,12 +68,15 @@ class JobPanelView @JvmOverloads constructor(
         openButton = findViewById(R.id.buttonJobOpen)
         startButton = findViewById(R.id.buttonJobStart)
         frameButton = findViewById(R.id.buttonJobFrame)
+        centerButton = findViewById(R.id.buttonJobCenter)
+        airSwitch = findViewById(R.id.switchJobAir)
         pauseButton = findViewById(R.id.buttonJobPause)
         resumeButton = findViewById(R.id.buttonJobResume)
         stopButton = findViewById(R.id.buttonJobStop)
 
         openButton.setOnClickListener { onOpenRequested?.invoke() }
         frameButton.setOnClickListener { onFrameRequested?.invoke() }
+        centerButton.setOnClickListener { onCenterRequested?.invoke() }
         startButton.setOnClickListener {
             onStartRequested?.invoke(laserOffCheck.isChecked)
         }
@@ -85,6 +91,13 @@ class JobPanelView @JvmOverloads constructor(
         get() = laserOffCheck.isChecked
         set(value) {
             laserOffCheck.isChecked = value
+        }
+
+    /** Air assist (M8/M9) during the next job. */
+    var isAirAssistChecked: Boolean
+        get() = airSwitch.isChecked
+        set(value) {
+            airSwitch.isChecked = value
         }
 
     /** Machine travel ($130/$131) for the preview frame. */
@@ -148,6 +161,8 @@ class JobPanelView @JvmOverloads constructor(
                 idle &&
                 !state.isActive &&
                 jobSnapshot.analysis != null
+        centerButton.isEnabled = frameButton.isEnabled
+        airSwitch.isEnabled = !state.isActive
         pauseButton.isEnabled = connected && state.canPause
         resumeButton.isEnabled = connected && state.canResume
         stopButton.isEnabled = connected && (state.isActive || framingActive)

@@ -9,5 +9,9 @@ enum class JogDirection {
     SOUTH,
     SOUTH_WEST,
     WEST,
-    NORTH_WEST
+    NORTH_WEST,
+
+    /** Optional Z axis. */
+    Z_UP,
+    Z_DOWN
 }

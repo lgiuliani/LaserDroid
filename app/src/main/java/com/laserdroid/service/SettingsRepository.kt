@@ -20,12 +20,17 @@ import kotlinx.coroutines.flow.stateIn
  * Application settings (DataStore, specification 2).
  */
 data class AppSettings(
-    /** Laser power while tracing the job frame, % of $30 (0 = off). */
-    val framingPowerPercent: Double = 2.0,
-    /** Frame tracing speed, mm/min. */
+    /**
+     * Low laser power, % of $30: job frame (FRAME) and
+     * hold-to-fire LASER button share the same value.
+     */
+    val lowPowerPercent: Double = 2.0,
+    /** FRAME and CENTER speed, mm/min. */
     val framingFeedRate: Double = 3_000.0,
-    /** Laser power of the hold-to-fire LASER button, % of $30. */
-    val pointerPowerPercent: Double = 2.0,
+    /** Optional Z axis: Z+ / Z- buttons, Z in SET ZERO and status. */
+    val zAxisEnabled: Boolean = false,
+    /** Start the service and the screen when the phone boots. */
+    val startOnBoot: Boolean = false,
     val soundsEnabled: Boolean = true,
     val logLevel: LogLevel = LogLevel.INFO,
     /** LaserGRBL over Wi-Fi (Telnet 2323). */
@@ -50,7 +55,8 @@ class SettingsRepository(
     private object Keys {
         val FRAMING_POWER = doublePreferencesKey("framing_power_percent")
         val FRAMING_FEED = doublePreferencesKey("framing_feed_rate")
-        val POINTER_POWER = doublePreferencesKey("pointer_power_percent")
+        val Z_AXIS = booleanPreferencesKey("z_axis_enabled")
+        val START_ON_BOOT = booleanPreferencesKey("start_on_boot")
         val SOUNDS = booleanPreferencesKey("sounds_enabled")
         val LOG_LEVEL = stringPreferencesKey("log_level")
         val REMOTE_ENABLED = booleanPreferencesKey("remote_enabled")
@@ -71,9 +77,10 @@ class SettingsRepository(
     suspend fun update(transform: (AppSettings) -> AppSettings) {
         dataStore.edit { preferences ->
             val updated = transform(fromPreferences(preferences))
-            preferences[Keys.FRAMING_POWER] = updated.framingPowerPercent
+            preferences[Keys.FRAMING_POWER] = updated.lowPowerPercent
             preferences[Keys.FRAMING_FEED] = updated.framingFeedRate
-            preferences[Keys.POINTER_POWER] = updated.pointerPowerPercent
+            preferences[Keys.Z_AXIS] = updated.zAxisEnabled
+            preferences[Keys.START_ON_BOOT] = updated.startOnBoot
             preferences[Keys.SOUNDS] = updated.soundsEnabled
             preferences[Keys.LOG_LEVEL] = updated.logLevel.name
             preferences[Keys.REMOTE_ENABLED] = updated.remoteEnabled
@@ -87,9 +94,11 @@ class SettingsRepository(
     private fun fromPreferences(preferences: Preferences): AppSettings {
         val defaults = AppSettings()
         return AppSettings(
-            framingPowerPercent = preferences[Keys.FRAMING_POWER] ?: defaults.framingPowerPercent,
+            lowPowerPercent = (preferences[Keys.FRAMING_POWER] ?: defaults.lowPowerPercent)
+                .takeIf { it > 0.0 } ?: defaults.lowPowerPercent,
             framingFeedRate = preferences[Keys.FRAMING_FEED] ?: defaults.framingFeedRate,
-            pointerPowerPercent = preferences[Keys.POINTER_POWER] ?: defaults.pointerPowerPercent,
+            zAxisEnabled = preferences[Keys.Z_AXIS] ?: defaults.zAxisEnabled,
+            startOnBoot = preferences[Keys.START_ON_BOOT] ?: defaults.startOnBoot,
             soundsEnabled = preferences[Keys.SOUNDS] ?: defaults.soundsEnabled,
             logLevel = preferences[Keys.LOG_LEVEL]
                 ?.let { name -> LogLevel.values().firstOrNull { it.name == name } }

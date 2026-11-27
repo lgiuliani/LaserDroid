@@ -6,12 +6,18 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.ComponentName
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
+import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.text.Editable
 import android.view.View
 import android.view.WindowManager
@@ -93,12 +99,16 @@ class MainActivity : Activity() {
 
         private const val PAGE_JOG = 0
         private const val PAGE_JOB = 1
-        private const val PAGE_CONSOLE = 2
-        private const val PAGE_SETTINGS = 3
+        private const val PAGE_SERVER = 2
+        private const val PAGE_CONSOLE = 3
+        private const val PAGE_SETTINGS = 4
 
-        private val FRAMING_POWER_VALUES = listOf(0.0, 1.0, 2.0, 5.0)
+        /* Screen kept on during a job, dimmed after this inactivity. */
+        private const val DIM_AFTER_MILLIS = 60_000L
+        private const val DIM_BRIGHTNESS = 0.05f
+
+        private val LOW_POWER_VALUES = listOf(1.0, 2.0, 5.0, 10.0)
         private val FRAMING_FEED_VALUES = listOf(1_000.0, 2_000.0, 3_000.0, 6_000.0)
-        private val POINTER_POWER_VALUES = listOf(1.0, 2.0, 5.0, 10.0)
         private val LOG_LEVEL_VALUES = listOf(1.0, 2.0, 3.0, 4.0, 5.0)
 
         /*
@@ -115,14 +125,17 @@ class MainActivity : Activity() {
     private lateinit var machineStateText: TextView
     private lateinit var positionText: TextView
     private lateinit var jobBadgeText: TextView
-    private lateinit var lastMessageText: TextView
     private lateinit var jogPanel: JogPanelView
     private lateinit var jobPanelView: JobPanelView
     private lateinit var consolePanel: View
     private lateinit var settingsPanel: View
-    private lateinit var framingPowerChips: ChoiceChipsView
+    private lateinit var lowPowerChips: ChoiceChipsView
+    private lateinit var serverPanel: View
+    private lateinit var zAxisSwitch: CompoundButton
+    private lateinit var startOnBootSwitch: CompoundButton
+    private lateinit var homeAppSwitch: CompoundButton
+    private lateinit var bootHelpText: TextView
     private lateinit var framingFeedChips: ChoiceChipsView
-    private lateinit var pointerPowerChips: ChoiceChipsView
     private lateinit var logLevelChips: ChoiceChipsView
     private lateinit var soundsSwitch: CompoundButton
     private lateinit var aboutText: TextView
@@ -147,6 +160,15 @@ class MainActivity : Activity() {
     private lateinit var machineServiceConnection: MachineServiceConnection
 
     private var currentPage = PAGE_JOG
+
+    /* Optional Z axis (SETTINGS). */
+    private var zAxisEnabled = false
+
+    /* Screen policy: kept on during a job, dimmed when inactive. */
+    private val screenHandler = Handler(Looper.getMainLooper())
+    private var keepScreenOn = false
+    private var dimmed = false
+    private val dimRunnable = Runnable { setScreenDimmed(true) }
     private var lastMachineSnapshot: MachineSnapshot = MachineSnapshot.initial()
 
     /* Coroutines bound to the Activity */
@@ -211,8 +233,10 @@ class MainActivity : Activity() {
 
         super.onCreate(savedInstanceState)
 
-        /* Keep the display on while this Activity is visible. */
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        /*
+         * Normal screen timeout when nothing runs; kept on (and dimmed
+         * when inactive) during a job: see updateScreenPolicy().
+         */
 
         setContentView(R.layout.activity_main)
 
@@ -240,6 +264,11 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleUsbIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        renderBootHelp()
     }
 
     override fun onPause() {
@@ -277,14 +306,17 @@ class MainActivity : Activity() {
         machineStateText = findViewById(R.id.textMachineState)
         positionText = findViewById(R.id.textPosition)
         jobBadgeText = findViewById(R.id.textJobBadge)
-        lastMessageText = findViewById(R.id.textLastMessage)
         jogPanel = findViewById(R.id.jogPanel)
         jobPanelView = findViewById(R.id.jobPanelView)
         consolePanel = findViewById(R.id.consolePanel)
         settingsPanel = findViewById(R.id.settingsPanel)
-        framingPowerChips = findViewById(R.id.chipsFramingPower)
+        lowPowerChips = findViewById(R.id.chipsLowPower)
+        serverPanel = findViewById(R.id.serverPanel)
+        zAxisSwitch = findViewById(R.id.switchZAxis)
+        startOnBootSwitch = findViewById(R.id.switchStartOnBoot)
+        homeAppSwitch = findViewById(R.id.switchHomeApp)
+        bootHelpText = findViewById(R.id.textBootHelp)
         framingFeedChips = findViewById(R.id.chipsFramingFeed)
-        pointerPowerChips = findViewById(R.id.chipsPointerPower)
         logLevelChips = findViewById(R.id.chipsLogLevel)
         soundsSwitch = findViewById(R.id.switchSounds)
         aboutText = findViewById(R.id.textAbout)
@@ -302,6 +334,7 @@ class MainActivity : Activity() {
         tabs = listOf(
             findViewById(R.id.tabJog),
             findViewById(R.id.tabJob),
+            findViewById(R.id.tabServer),
             findViewById(R.id.tabConsole),
             findViewById(R.id.tabSettings)
         )
@@ -324,9 +357,6 @@ class MainActivity : Activity() {
             }
         }
 
-        lastMessageText.setOnClickListener {
-            showPage(PAGE_CONSOLE)
-        }
     }
 
     private fun configureTabs() {
@@ -341,7 +371,7 @@ class MainActivity : Activity() {
         jobPanelView.visibility = if (page == PAGE_JOB) View.VISIBLE else View.GONE
         consolePanel.visibility = if (page == PAGE_CONSOLE) View.VISIBLE else View.GONE
         settingsPanel.visibility = if (page == PAGE_SETTINGS) View.VISIBLE else View.GONE
-        lastMessageText.visibility = if (page == PAGE_CONSOLE) View.GONE else View.VISIBLE
+        serverPanel.visibility = if (page == PAGE_SERVER) View.VISIBLE else View.GONE
         if (page != PAGE_JOG) {
             jogPanel.releaseLaser()
         }
@@ -417,10 +447,17 @@ class MainActivity : Activity() {
         val offline = state == MachineState.Disconnected || state == MachineState.Connecting
         val offset = machineService?.workCoordinateOffset ?: MachinePosition.ZERO
         /* Work coordinates (origin set with SET ZERO). */
-        positionText.text = if (offline) {
-            "X  ---.---  Y  ---.---"
-        } else {
-            String.format(
+        positionText.text = when {
+            offline && zAxisEnabled -> "X ---.--- Y ---.--- Z --.---"
+            offline -> "X  ---.---  Y  ---.---"
+            zAxisEnabled -> String.format(
+                Locale.US,
+                "X%8.3f Y%8.3f Z%7.3f",
+                snapshot.position.x - offset.x,
+                snapshot.position.y - offset.y,
+                snapshot.position.z - offset.z
+            )
+            else -> String.format(
                 Locale.US,
                 "X %8.3f  Y %8.3f",
                 snapshot.position.x - offset.x,
@@ -519,6 +556,9 @@ class MainActivity : Activity() {
             activityScope.launch {
                 manager.framingActive.collect { active ->
                     jobPanelView.setFramingActive(active)
+                    updateScreenPolicy(
+                        active || machineService?.jobSnapshot?.value?.state?.isActive == true
+                    )
                 }
             }
     }
@@ -845,11 +885,12 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Set work zero")
             .setMessage(
-                "The current head position becomes the work origin X0 Y0 " +
-                        "(G10 L20 P1, stored by GRBL)."
+                "The current head position becomes the work origin " +
+                        (if (zAxisEnabled) "X0 Y0 Z0" else "X0 Y0") +
+                        " (G10 L20 P1, stored by GRBL)."
             )
             .setPositiveButton("Set zero") { _, _ ->
-                activityScope.launch { service.setWorkZero() }
+                activityScope.launch { service.setWorkZero(includeZ = zAxisEnabled) }
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -869,7 +910,18 @@ class MainActivity : Activity() {
             JogDirection.SOUTH_WEST -> JogRequest(x = -step, y = -step, feedRate = speed)
             JogDirection.WEST -> JogRequest(x = -step, feedRate = speed)
             JogDirection.NORTH_WEST -> JogRequest(x = -step, y = step, feedRate = speed)
+            JogDirection.Z_UP -> JogRequest(z = step, feedRate = zFeedRate(speed))
+            JogDirection.Z_DOWN -> JogRequest(z = -step, feedRate = zFeedRate(speed))
         }
+    }
+
+    /* Z is usually much slower: limited to $112 when known. */
+    private fun zFeedRate(speed: Double): Double {
+        val maxZ = machineService?.manager?.settings?.value?.get(112)
+            ?.toDoubleOrNull()
+            ?.takeIf { it > 0.0 }
+            ?: return speed
+        return minOf(speed, maxZ)
     }
 
     private fun executeDirectionalJog(direction: JogDirection, step: Double, speed: Double) {
@@ -963,6 +1015,9 @@ class MainActivity : Activity() {
     private fun configureJobPanel() {
         jobPanelView.onOpenRequested = { showOpenDialog() }
         jobPanelView.onFrameRequested = { startFraming() }
+        jobPanelView.onCenterRequested = {
+            machineService?.moveToJobCenter()?.let { appendLog("Move to center refused: $it") }
+        }
         jobPanelView.onStartRequested = { laserOff ->
             when {
                 machineService?.jobSnapshot?.value?.isRecoverable == true -> showRecoveryDialog()
@@ -1014,6 +1069,7 @@ class MainActivity : Activity() {
     }
 
     private fun renderJob(job: JobSnapshot) {
+        updateScreenPolicy(job.state.isActive || machineService?.isFraming == true)
         jobPanelView.updateJob(snapshot = job, nowMillis = System.currentTimeMillis())
 
         if (job.state.isActive) {
@@ -1091,7 +1147,12 @@ class MainActivity : Activity() {
             return
         }
         activityScope.launch {
-            when (val result = service.jobManager.start(laserOff = laserOff)) {
+            when (
+                val result = service.jobManager.start(
+                    laserOff = laserOff,
+                    airAssist = jobPanelView.isAirAssistChecked
+                )
+            ) {
                 JobStartResult.Started ->
                     appendLog(if (laserOff) "Job started (LASER OFF)." else "Job started (LASER ON).")
                 is JobStartResult.Rejected ->
@@ -1213,7 +1274,13 @@ class MainActivity : Activity() {
         val service = machineService ?: return
         val run = {
             activityScope.launch {
-                when (val result = service.jobManager.recover(mode, laserOff)) {
+                when (
+                    val result = service.jobManager.recover(
+                        mode,
+                        laserOff,
+                        airAssist = jobPanelView.isAirAssistChecked
+                    )
+                ) {
                     JobStartResult.Started -> appendLog("Recovery started: $mode.")
                     is JobStartResult.Rejected -> appendLog("Recovery refused: ${result.reason}")
                 }
@@ -1335,6 +1402,102 @@ class MainActivity : Activity() {
 
     /*
      * ----------------------------------------------------
+     * SCREEN: KEPT ON DURING A JOB, DIMMED WHEN INACTIVE
+     * ----------------------------------------------------
+     */
+
+    private fun updateScreenPolicy(jobRunning: Boolean) {
+        if (jobRunning == keepScreenOn) return
+        keepScreenOn = jobRunning
+        if (jobRunning) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            scheduleDim()
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            screenHandler.removeCallbacks(dimRunnable)
+            setScreenDimmed(false)
+        }
+    }
+
+    private fun scheduleDim() {
+        screenHandler.removeCallbacks(dimRunnable)
+        if (keepScreenOn) {
+            screenHandler.postDelayed(dimRunnable, DIM_AFTER_MILLIS)
+        }
+    }
+
+    private fun setScreenDimmed(dim: Boolean) {
+        if (dim == dimmed) return
+        dimmed = dim
+        val attributes = window.attributes
+        attributes.screenBrightness =
+            if (dim) DIM_BRIGHTNESS else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        window.attributes = attributes
+    }
+
+    /* Any touch restores the brightness and restarts the delay. */
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        setScreenDimmed(false)
+        scheduleDim()
+    }
+
+    /*
+     * ----------------------------------------------------
+     * KIOSK: START ON BOOT, HOME SCREEN
+     * ----------------------------------------------------
+     */
+
+    private val homeAlias: ComponentName
+        get() = ComponentName(this, "com.laserdroid.HomeAlias")
+
+    private fun isHomeAppEnabled(): Boolean =
+        packageManager.getComponentEnabledSetting(homeAlias) ==
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+
+    private fun setHomeAppEnabled(enabled: Boolean) {
+        packageManager.setComponentEnabledSetting(
+            homeAlias,
+            if (enabled) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+            else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+            PackageManager.DONT_KILL_APP
+        )
+        if (enabled) {
+            // Lets the user choose LaserDroid as the default home app.
+            runCatching {
+                startActivity(
+                    Intent(Settings.ACTION_HOME_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        }
+    }
+
+    private fun requestOverlayPermission() {
+        runCatching {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        }
+    }
+
+    private fun renderBootHelp() {
+        bootHelpText.text = when {
+            isHomeAppEnabled() ->
+                "Home screen mode: choose LaserDroid as default home app. " +
+                        "Android then opens it at every boot."
+            Settings.canDrawOverlays(this) ->
+                "Start on boot ready (display over other apps granted)."
+            else ->
+                "Start on boot opens the screen only with \"Display over other apps\" " +
+                        "(asked when enabled) or in home screen mode. The service always starts."
+        }
+    }
+
+    /*
+     * ----------------------------------------------------
      * SETTINGS
      * ----------------------------------------------------
      */
@@ -1343,9 +1506,8 @@ class MainActivity : Activity() {
         val percentLabel: (Double) -> String = { value ->
             if (value == 0.0) "OFF" else formatNumber(value) + "%"
         }
-        framingPowerChips.setChoices(FRAMING_POWER_VALUES, 2.0, percentLabel)
+        lowPowerChips.setChoices(LOW_POWER_VALUES, 2.0, percentLabel)
         framingFeedChips.setChoices(FRAMING_FEED_VALUES, 3_000.0) { formatNumber(it) }
-        pointerPowerChips.setChoices(POINTER_POWER_VALUES, 2.0, percentLabel)
         logLevelChips.setChoices(LOG_LEVEL_VALUES, LogLevel.INFO.ordinal.toDouble()) { value ->
             when (value.toInt()) {
                 1 -> "ERR"
@@ -1356,15 +1518,31 @@ class MainActivity : Activity() {
             }
         }
 
-        framingPowerChips.onValueSelected = { value ->
-            machineService?.updateSettings { it.copy(framingPowerPercent = value) }
+        lowPowerChips.onValueSelected = { value ->
+            machineService?.updateSettings { it.copy(lowPowerPercent = value) }
         }
         framingFeedChips.onValueSelected = { value ->
             machineService?.updateSettings { it.copy(framingFeedRate = value) }
         }
-        pointerPowerChips.onValueSelected = { value ->
-            machineService?.updateSettings { it.copy(pointerPowerPercent = value) }
+        zAxisSwitch.setOnCheckedChangeListener { _, checked ->
+            if (!displayingSettings) {
+                machineService?.updateSettings { it.copy(zAxisEnabled = checked) }
+            }
         }
+        startOnBootSwitch.setOnCheckedChangeListener { _, checked ->
+            if (!displayingSettings) {
+                machineService?.updateSettings { it.copy(startOnBoot = checked) }
+                if (checked && !Settings.canDrawOverlays(this) && !isHomeAppEnabled()) {
+                    requestOverlayPermission()
+                }
+            }
+        }
+        homeAppSwitch.isChecked = isHomeAppEnabled()
+        homeAppSwitch.setOnCheckedChangeListener { _, checked ->
+            setHomeAppEnabled(checked)
+            renderBootHelp()
+        }
+        renderBootHelp()
         logLevelChips.onValueSelected = { value ->
             val level = LogLevel.values()[value.toInt().coerceIn(0, LogLevel.values().lastIndex)]
             machineService?.updateSettings { it.copy(logLevel = level) }
@@ -1407,7 +1585,7 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.buttonRemoteDisconnect).setOnClickListener {
             machineService?.disconnectRemoteClient()
         }
-        remoteBadgeText.setOnClickListener { showPage(PAGE_SETTINGS) }
+        remoteBadgeText.setOnClickListener { showPage(PAGE_SERVER) }
 
         findViewById<View>(R.id.buttonHistory).setOnClickListener { showHistoryDialog() }
         findViewById<View>(R.id.buttonLibrary).setOnClickListener { showOpenDialog() }
@@ -1423,9 +1601,10 @@ class MainActivity : Activity() {
 
     private fun renderSettings(service: MachineService, settings: AppSettings) {
         displayingSettings = true
-        framingPowerChips.selectValue(settings.framingPowerPercent)
+        lowPowerChips.selectValue(settings.lowPowerPercent)
+        zAxisSwitch.isChecked = settings.zAxisEnabled
+        startOnBootSwitch.isChecked = settings.startOnBoot
         framingFeedChips.selectValue(settings.framingFeedRate)
-        pointerPowerChips.selectValue(settings.pointerPowerPercent)
         logLevelChips.selectValue(settings.logLevel.ordinal.toDouble())
         soundsSwitch.isChecked = settings.soundsEnabled
         remoteSwitch.isChecked = settings.remoteEnabled
@@ -1446,7 +1625,12 @@ class MainActivity : Activity() {
         remoteRelaySwitch.isEnabled = settings.remoteMode == RemoteMode.RECEPTION
         remotePauseSwitch.isEnabled = settings.remoteMode == RemoteMode.BRIDGE
 
-        jogPanel.setLaserPointerPercent(settings.pointerPowerPercent)
+        jogPanel.setLaserPointerPercent(settings.lowPowerPercent)
+        if (zAxisEnabled != settings.zAxisEnabled) {
+            zAxisEnabled = settings.zAxisEnabled
+            jogPanel.setZAxisEnabled(zAxisEnabled)
+            renderMachine(lastMachineSnapshot)
+        }
         aboutText.text = "Log file: ${service.logBook.currentFile.absolutePath}\n" +
                 "Library: ${File(filesDir, "library").absolutePath}"
     }
@@ -1545,7 +1729,6 @@ class MainActivity : Activity() {
     private fun setLog(message: String) {
         runOnUiThread {
             logText.text = message.takeLast(MAX_LOG_CHARACTERS)
-            lastMessageText.text = message.substringAfterLast('\n')
             scrollLogToBottom()
         }
     }
@@ -1580,7 +1763,6 @@ class MainActivity : Activity() {
             } else {
                 logText.append("\n$message")
             }
-            lastMessageText.text = message
             scrollLogToBottom()
         }
     }

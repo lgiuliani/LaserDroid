@@ -1,6 +1,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Dark theme in both modes: workshop use, laser glare. -->
-    <style name="Base.Theme.LaserDroid" parent="Theme.Material3.Dark.NoActionBar">
+    <!-- Follows the phone theme (light / dark): colors in values / values-night. -->
+    <style name="Base.Theme.LaserDroid" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/ld_accent</item>
         <item name="colorAccent">@color/ld_accent</item>
         <item name="android:windowBackground">@color/ld_background</item>

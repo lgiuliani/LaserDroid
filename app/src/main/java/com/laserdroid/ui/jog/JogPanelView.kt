@@ -6,6 +6,7 @@ import android.annotation.SuppressLint
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.widget.TextView
 import android.widget.FrameLayout
 import com.laserdroid.R
@@ -74,6 +75,9 @@ class JogPanelView @JvmOverloads constructor(
     private val cancelButton: View
     private val setZeroButton: View
     private val laserButton: TextView
+    private val zColumn: View
+    private val zUpButton: View
+    private val zDownButton: View
 
     /* LASER currently held: must be switched off on any exit. */
     private var laserActive = false
@@ -87,6 +91,9 @@ class JogPanelView @JvmOverloads constructor(
         cancelButton = findViewById(R.id.buttonJogCancel)
         setZeroButton = findViewById(R.id.buttonSetZero)
         laserButton = findViewById(R.id.buttonLaserPointer)
+        zColumn = findViewById(R.id.columnJogZ)
+        zUpButton = findViewById(R.id.buttonJogZUp)
+        zDownButton = findViewById(R.id.buttonJogZDown)
 
         stepChips.setChoices(STEP_VALUES, DEFAULT_STEP) { formatNumber(it) }
         speedChips.setChoices(SPEED_VALUES, DEFAULT_SPEED) { formatSpeed(it) }
@@ -103,6 +110,8 @@ class JogPanelView @JvmOverloads constructor(
         cancelButton.setOnClickListener { onCancelRequested() }
         setZeroButton.setOnClickListener { onSetZeroRequested() }
         configureLaserButton()
+        bindZButton(zUpButton, JogDirection.Z_UP)
+        bindZButton(zDownButton, JogDirection.Z_DOWN)
 
         updateMachineState(MachineState.Disconnected)
     }
@@ -123,6 +132,56 @@ class JogPanelView @JvmOverloads constructor(
                 MotionEvent.ACTION_CANCEL -> {
                     view.isPressed = false
                     releaseLaser()
+                }
+            }
+            true
+        }
+    }
+
+    /** Shows the Z+ / Z- buttons (optional Z axis, SETTINGS). */
+    fun setZAxisEnabled(enabled: Boolean) {
+        zColumn.visibility = if (enabled) View.VISIBLE else View.GONE
+    }
+
+    /*
+     * Z buttons: tap = one step, long press = continuous jog.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun bindZButton(button: View, direction: JogDirection) {
+        var continuous = false
+        val startContinuous = Runnable {
+            if (button.isEnabled) {
+                continuous = true
+                onContinuousJogStart(direction, getSelectedStep(), getSelectedSpeed())
+            }
+        }
+        button.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    view.isPressed = true
+                    continuous = false
+                    view.postDelayed(
+                        startContinuous,
+                        ViewConfiguration.getLongPressTimeout().toLong()
+                    )
+                }
+                MotionEvent.ACTION_UP -> {
+                    view.isPressed = false
+                    view.removeCallbacks(startContinuous)
+                    if (continuous) {
+                        continuous = false
+                        onContinuousJogStop()
+                    } else if (view.isEnabled) {
+                        onJogClick(direction, getSelectedStep(), getSelectedSpeed())
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    view.isPressed = false
+                    view.removeCallbacks(startContinuous)
+                    if (continuous) {
+                        continuous = false
+                        onContinuousJogStop()
+                    }
                 }
             }
             true
@@ -175,6 +234,8 @@ class JogPanelView @JvmOverloads constructor(
 
         dial.isEnabled = jogEnabled
         setZeroButton.isEnabled = jogEnabled
+        zUpButton.isEnabled = jogEnabled
+        zDownButton.isEnabled = jogEnabled
         laserButton.isEnabled = state == MachineState.Idle || laserActive
         if (!connected) {
             releaseLaser()

@@ -223,9 +223,12 @@ class JobManager(
      *
      * @param laserOff dry run: M3/M4 -> M5 and S -> S0 while
      * streaming. The file is not modified.
+     * @param airAssist air assist on during the job: M8 before the
+     * first line, M9 after the last one (a reset also stops it).
      */
     suspend fun start(
-        laserOff: Boolean
+        laserOff: Boolean,
+        airAssist: Boolean = false
     ): JobStartResult = commandMutex.withLock {
 
         val current = _snapshot.value
@@ -262,6 +265,7 @@ class JobManager(
             name = current.name,
             analysis = analysis,
             laserOff = laserOff,
+            airAssist = airAssist,
             totalCommands = analysis!!.executableCommands,
             startedAtMillis = clock()
         )
@@ -271,7 +275,9 @@ class JobManager(
                 programSource!!,
                 activeController!!,
                 activeMachine,
-                laserOff
+                laserOff,
+                preamble = if (airAssist) listOf(WorkshopCommands.AIR_ON) else emptyList(),
+                airAssist = airAssist
             )
         }
 
@@ -332,7 +338,8 @@ class JobManager(
      */
     suspend fun recover(
         mode: RecoveryMode,
-        laserOff: Boolean
+        laserOff: Boolean,
+        airAssist: Boolean = false
     ): JobStartResult {
         val assessment = assessRecovery()
             ?: return JobStartResult.Rejected("Nothing to recover")
@@ -376,6 +383,10 @@ class JobManager(
                 preamble += WorkshopCommands.resumePreamble(modal, laserOff)
             }
 
+            if (airAssist) {
+                preamble += WorkshopCommands.AIR_ON
+            }
+
             if (!activeMachine.beginJob()) {
                 return@withLock JobStartResult.Rejected(
                     "Machine is not Idle (${activeMachine.snapshot.value.machineState})"
@@ -391,6 +402,7 @@ class JobManager(
                 name = current.name,
                 analysis = analysis,
                 laserOff = laserOff,
+                airAssist = airAssist,
                 totalCommands = analysis.executableCommands,
                 commandsSent = alreadyDone,
                 commandsAcknowledged = alreadyDone,
@@ -411,7 +423,8 @@ class JobManager(
                     laserOff,
                     preamble = preamble,
                     startAfterLine = startAfterLine,
-                    alreadyDone = alreadyDone
+                    alreadyDone = alreadyDone,
+                    airAssist = airAssist
                 )
             }
 
@@ -529,7 +542,8 @@ class JobManager(
         laserOff: Boolean,
         preamble: List<String> = emptyList(),
         startAfterLine: Long = 0L,
-        alreadyDone: Int = 0
+        alreadyDone: Int = 0,
+        airAssist: Boolean = false
     ) {
         val engine = SendResponseStreamingEngine(
             controller = activeController,
@@ -552,7 +566,7 @@ class JobManager(
                     )
                     if (ack != com.laserdroid.controllers.api.CommandResult.Acknowledged) {
                         runCatching { activeController.stop() }
-                        finish(JobState.ERROR, "Recovery command '$command' failed: $ack")
+                        finish(JobState.ERROR, "Preparation command '$command' failed: $ack")
                         return@coroutineScope
                     }
                 }
@@ -571,7 +585,7 @@ class JobManager(
                     }
                 }
 
-                handleStreamingResult(result, activeController)
+                handleStreamingResult(result, activeController, airAssist)
 
             } catch (exception: CancellationException) {
                 // stop() / detachMachine() own the final state.
@@ -596,10 +610,20 @@ class JobManager(
 
     private suspend fun handleStreamingResult(
         result: StreamingState,
-        activeController: CncController
+        activeController: CncController,
+        airAssist: Boolean
     ) {
         when (result) {
-            is StreamingState.Completed -> waitForCompletion(activeController)
+            is StreamingState.Completed -> {
+                if (airAssist) {
+                    // Executed after the last motion (GRBL syncs M9).
+                    activeController.executeCommand(
+                        WorkshopCommands.AIR_OFF,
+                        config.ackInactivityTimeoutMillis
+                    )
+                }
+                waitForCompletion(activeController)
+            }
 
             is StreamingState.Failed -> {
                 _snapshot.update {

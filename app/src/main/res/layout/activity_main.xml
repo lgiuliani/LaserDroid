@@ -87,21 +87,6 @@
 
     </LinearLayout>
 
-    <!-- Last log message (tap: console) -->
-
-    <TextView
-        android:id="@+id/textLastMessage"
-        android:layout_width="match_parent"
-        android:layout_height="22dp"
-        android:background="@color/ld_log_background"
-        android:ellipsize="end"
-        android:gravity="center_vertical"
-        android:maxLines="1"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp"
-        android:textColor="@color/ld_text_secondary"
-        android:textSize="11sp"
-        android:typeface="monospace" />
 
     <FrameLayout
         android:id="@+id/pageContainer"
@@ -116,6 +101,13 @@
 
         <com.laserdroid.ui.job.JobPanelView
             android:id="@+id/jobPanelView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+
+        <include
+            android:id="@+id/serverPanel"
+            layout="@layout/view_server_panel"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:visibility="gone" />
@@ -158,6 +150,15 @@
             android:layout_weight="1"
             android:drawableTop="@drawable/ic_play"
             android:text="JOB" />
+
+        <TextView
+            android:id="@+id/tabServer"
+            style="@style/LdTab"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:drawableTop="@drawable/ic_wifi"
+            android:text="SERVER" />
         <TextView
             android:id="@+id/tabConsole"
             style="@style/LdTab"

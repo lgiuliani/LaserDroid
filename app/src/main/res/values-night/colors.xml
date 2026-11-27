@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- LaserDroid dark palette -->
+    <color name="ld_background">#FF101214</color>
+    <color name="ld_bar">#FF16191D</color>
+    <color name="ld_surface">#FF22262B</color>
+    <color name="ld_surface_pressed">#FF333941</color>
+    <color name="ld_surface_disabled">#FF181B1E</color>
+    <color name="ld_border">#FF30353C</color>
+    <color name="ld_log_background">#FF0A0B0C</color>
+    <color name="ld_log_text">#FFD0D6DB</color>
+    <color name="ld_text">#FFECEFF1</color>
+    <color name="ld_text_secondary">#FF9AA4AE</color>
+    <color name="ld_text_disabled">#FF555B61</color>
+    <color name="ld_accent">#FFFF7A1A</color>
+    <color name="ld_accent_pressed">#FFC65A0A</color>
+    <color name="ld_danger">#FFD32F2F</color>
+    <color name="ld_danger_pressed">#FF9A2020</color>
+    <color name="ld_danger_disabled">#FF3A1C1C</color>
+    <color name="ld_state_idle">#FF43A047</color>
+    <color name="ld_state_run">#FF1E88E5</color>
+    <color name="ld_state_hold">#FFFFB300</color>
+    <color name="ld_state_alarm">#FFE53935</color>
+    <color name="ld_state_offline">#FF546E7A</color>
+    <color name="ld_preview_background">#FF101010</color>
+    <color name="ld_preview_rapid">#FF5A5A5A</color>
+    <color name="ld_preview_travel">#FF4682DC</color>
+    <color name="ld_preview_work">#FFFF9628</color>
+    <color name="ld_preview_done">#FF50DC78</color>
+    <color name="ld_preview_machine">#FF3C3C3C</color>
+    <color name="ld_preview_axis">#FF782828</color>
+    <color name="ld_preview_head">#FFFF2020</color>
+</resources>

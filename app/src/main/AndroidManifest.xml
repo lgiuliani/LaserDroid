@@ -26,6 +26,10 @@
     <uses-permission
         android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Optional start when the phone boots. -->
+    <uses-permission
+        android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <!-- Keeps the CPU running during a job, screen off. -->
     <uses-permission
         android:name="android.permission.WAKE_LOCK" />
@@ -72,6 +76,47 @@
                 android:resource="@xml/device_filter" />
 
         </activity>
+
+        <!--
+            Kiosk option: LaserDroid as home screen (enabled from
+            SETTINGS). Android then starts it at every boot.
+        -->
+        <activity-alias
+            android:name=".HomeAlias"
+            android:enabled="false"
+            android:exported="true"
+            android:targetActivity=".MainActivity">
+
+            <intent-filter>
+
+                <action
+                    android:name="android.intent.action.MAIN" />
+
+                <category
+                    android:name="android.intent.category.HOME" />
+
+                <category
+                    android:name="android.intent.category.DEFAULT" />
+
+            </intent-filter>
+
+        </activity-alias>
+
+        <receiver
+            android:name=".service.BootReceiver"
+            android:exported="true">
+
+            <intent-filter>
+
+                <action
+                    android:name="android.intent.action.BOOT_COMPLETED" />
+
+                <action
+                    android:name="android.intent.action.QUICKBOOT_POWERON" />
+
+            </intent-filter>
+
+        </receiver>
 
         <service
             android:name=".service.MachineService"

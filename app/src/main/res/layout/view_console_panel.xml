@@ -135,7 +135,7 @@
             android:layout_height="wrap_content"
             android:bufferType="editable"
             android:padding="6dp"
-            android:textColor="#FFD0D6DB"
+            android:textColor="@color/ld_log_text"
             android:textIsSelectable="true"
             android:textSize="11sp"
             android:typeface="monospace" />

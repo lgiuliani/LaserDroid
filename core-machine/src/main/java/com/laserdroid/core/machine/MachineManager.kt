@@ -471,7 +471,9 @@ class MachineManager(
      * Current position becomes the work origin X0 Y0
      * (G10 L20 P1, stored by GRBL).
      */
-    suspend fun setWorkZero(): CommandResult {
+    suspend fun setWorkZero(
+        includeZ: Boolean = false
+    ): CommandResult {
 
         if (!snapshot.value.canJog) {
             return CommandResult.Rejected(code = null)
@@ -479,7 +481,7 @@ class MachineManager(
 
         val result =
             controller.executeCommand(
-                "G10 L20 P1 X0 Y0"
+                if (includeZ) "G10 L20 P1 X0 Y0 Z0" else "G10 L20 P1 X0 Y0"
             )
 
         controller.requestStatus()
@@ -795,6 +797,65 @@ class MachineManager(
                     exception
             )
         }
+    }
+
+    /**
+     * Laser off jog to an absolute work position (X/Y only), then
+     * waits until Idle. Cancellable with [cancelJog].
+     */
+    suspend fun goTo(
+        x: Double,
+        y: Double,
+        feedRate: Double
+    ): MachineOperationResult {
+
+        require(
+            x.isFinite() && y.isFinite() &&
+                    feedRate.isFinite() && feedRate > 0.0
+        ) {
+            "Target and feed rate must be finite, feed rate positive"
+        }
+
+        val currentSnapshot =
+            snapshot.value
+
+        if (!currentSnapshot.canJog) {
+            return MachineOperationResult.Interrupted(
+                currentSnapshot.machineState
+            )
+        }
+
+        val offset =
+            controller.workCoordinateOffset.value
+
+        val distance =
+            hypot(
+                x - (currentSnapshot.position.x - offset.x),
+                y - (currentSnapshot.position.y - offset.y)
+            )
+
+        _events.emit(
+            MachineEvent.JogStarted(
+                "Move to X$x Y$y F=$feedRate"
+            )
+        )
+
+        val result =
+            controller.executeCommand(
+                "\$J=G21 G90 X${formatValue(x)} Y${formatValue(y)} F${formatValue(feedRate)}"
+            )
+
+        if (result != CommandResult.Acknowledged) {
+            return MachineOperationResult.CommandRejected(result)
+        }
+
+        return monitorUntilIdle(
+            timeoutMillis =
+                calculateMotionTimeout(
+                    distanceMillimeters = distance,
+                    feedRate = feedRate
+                )
+        )
     }
 
     suspend fun startContinuousJog(

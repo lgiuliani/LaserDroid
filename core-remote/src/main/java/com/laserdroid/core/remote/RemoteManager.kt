@@ -102,7 +102,7 @@ class RemoteManager(
             error = errors.firstOrNull()
         )
         log(
-            "LaserGRBL Wi-Fi ${current.mode}: Telnet ${_status.value.telnetPort ?: "failed"}" +
+            "GRBL server ${current.mode}: Telnet ${_status.value.telnetPort ?: "failed"}" +
                     if (current.webSocketEnabled) ", WebSocket ${_status.value.webSocketPort ?: "failed"}" else ""
         )
         errors.forEach { log("Server error: $it") }

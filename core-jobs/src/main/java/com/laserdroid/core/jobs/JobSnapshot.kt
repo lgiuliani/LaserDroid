@@ -16,6 +16,8 @@ data class JobSnapshot(
     val name: String? = null,
     val analysis: GCodeAnalysis? = null,
     val laserOff: Boolean = true,
+    /** Air assist (M8) on during the job. */
+    val airAssist: Boolean = false,
     val totalCommands: Int = 0,
     val commandsSent: Int = 0,
     val commandsAcknowledged: Int = 0,

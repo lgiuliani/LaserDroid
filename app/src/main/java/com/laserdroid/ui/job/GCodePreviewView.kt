@@ -10,6 +10,8 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
+import androidx.core.content.ContextCompat
+import com.laserdroid.R
 import com.laserdroid.core.gcode.GCodeAnalysis
 import com.laserdroid.core.gcode.GCodePreviewPath
 import com.laserdroid.core.gcode.SegmentType
@@ -79,26 +81,29 @@ class GCodePreviewView @JvmOverloads constructor(
     private val drawMatrix = Matrix()
     private val pointBuffer = FloatArray(2)
 
-    private val rapidPaint = hairline(Color.rgb(90, 90, 90))
-    private val travelPaint = hairline(Color.rgb(70, 130, 220))
-    private val workPaint = hairline(Color.rgb(255, 150, 40))
-    private val donePaint = hairline(Color.rgb(80, 220, 120))
-    private val machinePaint = hairline(Color.rgb(60, 60, 60))
-    private val axisPaint = hairline(Color.rgb(120, 40, 40))
+    /* Colors follow the light / dark theme (values / values-night). */
+    private fun themeColor(id: Int): Int = ContextCompat.getColor(context, id)
+
+    private val rapidPaint = hairline(themeColor(R.color.ld_preview_rapid))
+    private val travelPaint = hairline(themeColor(R.color.ld_preview_travel))
+    private val workPaint = hairline(themeColor(R.color.ld_preview_work))
+    private val donePaint = hairline(themeColor(R.color.ld_preview_done))
+    private val machinePaint = hairline(themeColor(R.color.ld_preview_machine))
+    private val axisPaint = hairline(themeColor(R.color.ld_preview_axis))
 
     private val headPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.RED
+        color = themeColor(R.color.ld_preview_head)
         strokeWidth = 3f
         style = Paint.Style.STROKE
     }
 
     private val startPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(80, 220, 120)
+        color = themeColor(R.color.ld_preview_done)
         style = Paint.Style.FILL
     }
 
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(150, 150, 150)
+        color = themeColor(R.color.ld_text_secondary)
         textSize = 11f * resources.displayMetrics.scaledDensity
     }
 
@@ -150,7 +155,7 @@ class GCodePreviewView @JvmOverloads constructor(
     )
 
     init {
-        setBackgroundColor(Color.rgb(16, 16, 16))
+        setBackgroundColor(themeColor(R.color.ld_preview_background))
     }
 
     /*

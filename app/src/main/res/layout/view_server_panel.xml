@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!-- GRBL server page (portrait and landscape). -->
+
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="6dp">
+
+        <TextView
+            android:id="@+id/textRemoteInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_input"
+            android:padding="8dp"
+            android:textColor="@color/ld_text"
+            android:textSize="13sp"
+            android:typeface="monospace" />
+
+        <Switch
+            android:id="@+id/switchRemote"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:paddingStart="6dp"
+            android:text="GRBL server (Telnet 2323)"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            style="@style/LdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="10dp"
+            android:text="MODE" />
+
+        <com.laserdroid.ui.common.ChoiceChipsView
+            android:id="@+id/chipsRemoteMode"
+            android:layout_width="match_parent"
+            android:layout_height="46dp" />
+
+        <TextView
+            android:id="@+id/textRemoteModeHelp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="6dp"
+            android:paddingBottom="4dp"
+            android:textColor="@color/ld_text_secondary"
+            android:textSize="11sp" />
+
+        <Switch
+            android:id="@+id/switchRemoteWebSocket"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:paddingStart="6dp"
+            android:text="Also WebSocket 8181 (LaserWebESP8266)"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <Switch
+            android:id="@+id/switchRemoteRelay"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:paddingStart="6dp"
+            android:text="Relay Jog / Unlock from the PC"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <Switch
+            android:id="@+id/switchRemotePause"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:paddingStart="6dp"
+            android:text="Bridge: feed hold if the PC is lost"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/buttonRemoteDisconnect"
+            style="@style/LdButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:drawableStart="@drawable/ic_close"
+            android:paddingStart="24dp"
+            android:paddingEnd="48dp"
+            android:text="DISCONNECT PC" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="4dp"
+            android:paddingTop="10dp"
+            android:text="Any GRBL sender with a Telnet (raw TCP) or WebSocket connection can use this server: LaserGRBL, LightBurn (TCP), etc."
+            android:textColor="@color/ld_text_secondary"
+            android:textSize="11sp" />
+
+    </LinearLayout>
+
+</ScrollView>

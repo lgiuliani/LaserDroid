@@ -423,6 +423,21 @@ class JobManagerTest {
     }
 
     @Test
+    fun `air assist wraps the job with M8 and M9`() = runBlocking<Unit> {
+        val f = fixture()
+        f.jobs.load(TextGCodeSource("job.nc", program(20)))
+        f.jobs.start(laserOff = true, airAssist = true)
+        f.waitForState(JobState.COMPLETED)
+
+        val commands = f.controller.commands
+        assertEquals("M8", commands.first())
+        assertEquals("M9", commands.last())
+        assertEquals(26, commands.size)
+        assertEquals(24, f.jobs.snapshot.value.commandsAcknowledged)
+        assertTrue(f.jobs.snapshot.value.airAssist)
+    }
+
+    @Test
     fun `progress estimates`() {
         val snapshot = JobSnapshot(
             state = JobState.RUNNING,

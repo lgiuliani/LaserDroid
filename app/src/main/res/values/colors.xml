@@ -3,27 +3,34 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 
-    <!-- LaserDroid dark palette -->
-    <color name="ld_background">#FF101214</color>
-    <color name="ld_bar">#FF16191D</color>
-    <color name="ld_surface">#FF22262B</color>
-    <color name="ld_surface_pressed">#FF333941</color>
-    <color name="ld_surface_disabled">#FF181B1E</color>
-    <color name="ld_border">#FF30353C</color>
-    <color name="ld_log_background">#FF0A0B0C</color>
-    <color name="ld_text">#FFECEFF1</color>
-    <color name="ld_text_secondary">#FF9AA4AE</color>
-    <color name="ld_text_disabled">#FF555B61</color>
-    <color name="ld_accent">#FFFF7A1A</color>
-    <color name="ld_accent_pressed">#FFC65A0A</color>
+    <!-- LaserDroid light palette (night: values-night/colors.xml) -->
+    <color name="ld_background">#FFF2F3F5</color>
+    <color name="ld_bar">#FFFFFFFF</color>
+    <color name="ld_surface">#FFFFFFFF</color>
+    <color name="ld_surface_pressed">#FFE1E5EA</color>
+    <color name="ld_surface_disabled">#FFE9EBEE</color>
+    <color name="ld_border">#FFC5CBD2</color>
+    <color name="ld_log_background">#FFFFFFFF</color>
+    <color name="ld_log_text">#FF263238</color>
+    <color name="ld_text">#FF1B1F24</color>
+    <color name="ld_text_secondary">#FF5B6670</color>
+    <color name="ld_text_disabled">#FFA6ADB4</color>
+    <color name="ld_accent">#FFE8650A</color>
+    <color name="ld_accent_pressed">#FFB04A04</color>
     <color name="ld_danger">#FFD32F2F</color>
     <color name="ld_danger_pressed">#FF9A2020</color>
-    <color name="ld_danger_disabled">#FF3A1C1C</color>
-
-    <!-- Machine states -->
+    <color name="ld_danger_disabled">#FFF1C9C9</color>
     <color name="ld_state_idle">#FF43A047</color>
     <color name="ld_state_run">#FF1E88E5</color>
     <color name="ld_state_hold">#FFFFB300</color>
     <color name="ld_state_alarm">#FFE53935</color>
-    <color name="ld_state_offline">#FF546E7A</color>
+    <color name="ld_state_offline">#FF90A4AE</color>
+    <color name="ld_preview_background">#FFFFFFFF</color>
+    <color name="ld_preview_rapid">#FFB0B0B0</color>
+    <color name="ld_preview_travel">#FF3A6FC4</color>
+    <color name="ld_preview_work">#FFE8650A</color>
+    <color name="ld_preview_done">#FF2E9E52</color>
+    <color name="ld_preview_machine">#FFD0D4D8</color>
+    <color name="ld_preview_axis">#FFC62828</color>
+    <color name="ld_preview_head">#FFD50000</color>
 </resources>

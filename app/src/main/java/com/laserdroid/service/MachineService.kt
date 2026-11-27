@@ -280,6 +280,8 @@ class MachineService : Service() {
             settings.collect { value ->
                 logBook.level = value.logLevel
                 soundPlayer.enabled = value.soundsEnabled
+                // Read by BootReceiver, before DataStore is available.
+                BootReceiver.setStartOnBoot(applicationContext, value.startOnBoot)
                 remoteManager.apply(
                     RemoteConfig(
                         enabled = value.remoteEnabled,
@@ -664,7 +666,7 @@ class MachineService : Service() {
 
         val current = settings.value
         val power = WorkshopCommands.powerValue(
-            current.framingPowerPercent,
+            current.lowPowerPercent,
             activeManager.maxLaserPower
         )
         val commands = WorkshopCommands.framing(bounds, current.framingFeedRate, power)
@@ -675,7 +677,7 @@ class MachineService : Service() {
                 "Framing %.1f x %.1f mm, laser %.0f%% (S%s)",
                 bounds.width,
                 bounds.height,
-                current.framingPowerPercent,
+                current.lowPowerPercent,
                 WorkshopCommands.format(power)
             )
         )
@@ -721,7 +723,7 @@ class MachineService : Service() {
             for (on in pointerRequests) {
                 val activeManager = machineManager ?: continue
                 if (on) {
-                    val percent = settings.value.pointerPowerPercent
+                    val percent = settings.value.lowPowerPercent
                     val result = runCatching { activeManager.laserPointerOn(percent) }.getOrNull()
                     if (result == CommandResult.Acknowledged) {
                         logBook.warning(
@@ -746,11 +748,38 @@ class MachineService : Service() {
         }
     }
 
-    suspend fun setWorkZero(): CommandResult {
+    /**
+     * Moves the laser (off) to the center of the loaded program,
+     * X/Y only. Returns a refusal reason or null.
+     */
+    fun moveToJobCenter(): String? {
+        val activeManager = machineManager ?: return "Machine is not connected"
+        val job = jobSnapshot.value
+        if (job.state.isActive) return "A job is running"
+        val analysis = job.analysis ?: return "No program loaded"
+        val bounds = analysis.workBounds ?: analysis.totalBounds ?: return "Program has no moves"
+        if (!activeManager.snapshot.value.canJog) return "Machine is not Idle"
+
+        val (x, y) = WorkshopCommands.center(bounds)
+        val feed = settings.value.framingFeedRate
+        logBook.info(String.format(Locale.US, "Move to job center X%.3f Y%.3f", x, y))
+        serviceScope.launch {
+            val result = runCatching { activeManager.goTo(x, y, feed) }.getOrNull()
+            if (result !is MachineOperationResult.Completed) {
+                logBook.warning("Move to center: $result")
+            }
+        }
+        return null
+    }
+
+    suspend fun setWorkZero(includeZ: Boolean = false): CommandResult {
         val activeManager = machineManager ?: return CommandResult.Disconnected
-        val result = activeManager.setWorkZero()
+        val result = activeManager.setWorkZero(includeZ)
         if (result == CommandResult.Acknowledged) {
-            logBook.info("Work origin set: current position = X0 Y0 (G10 L20 P1).")
+            logBook.info(
+                "Work origin set: current position = " +
+                        (if (includeZ) "X0 Y0 Z0" else "X0 Y0") + " (G10 L20 P1)."
+            )
         } else {
             logBook.warning("Set zero refused: $result")
         }
