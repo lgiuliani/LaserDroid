@@ -5,6 +5,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -93,7 +94,11 @@ class LogBook(
 
         val fileLine = synchronized(fileTimeFormat) { fileTimeFormat.format(now) } +
                 " " + messageLevel.name + " " + message
-        writer.execute { writeToFile(fileLine) }
+        try {
+            writer.execute { writeToFile(fileLine) }
+        } catch (exception: RejectedExecutionException) {
+            // Closed: late messages (service shutdown) stay in memory only.
+        }
     }
 
     /** Lines kept in memory, oldest first. */
@@ -104,6 +109,7 @@ class LogBook(
         synchronized(memory) { memory.clear() }
     }
 
+    /** Stops the file writer; later messages are kept in memory only. */
     fun close() {
         writer.shutdown()
     }

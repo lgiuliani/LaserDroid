@@ -1,5 +1,6 @@
 package com.laserdroid.communication.usb
 
+/** Result of [UsbSerialConnection.open]. */
 sealed interface UsbConnectionResult {
 
     data object PermissionRequired :

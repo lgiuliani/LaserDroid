@@ -7,10 +7,19 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
+/**
+ * In-memory [SerialTransport] backed by a [GrblSimulator].
+ *
+ * Simulates disconnection ([disconnectAtCommand]) and a silent
+ * controller ([timeoutAtCommand]); realtime bytes are recorded in
+ * [realtimeCommands].
+ */
 class FakeSerialTransport : SerialTransport {
 
+    /** 1-based line command at which the link is lost. */
     var disconnectAtCommand: Int? = null
 
+    /** 1-based line command that never gets an answer. */
     var timeoutAtCommand: Int? = null
 
     private var commandCount = 0

@@ -42,6 +42,7 @@ class SendResponseStreamingEngine(
     val progress: StateFlow<StreamingProgress>
         get() = _progress
 
+    /** Streams the executable lines of an in-memory [program]. */
     suspend fun execute(
         program: GCodeProgram
     ): StreamingState {

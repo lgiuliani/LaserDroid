@@ -2,6 +2,9 @@ package com.laserdroid.core.machine
 
 import com.laserdroid.controllers.api.MachinePosition
 
+/**
+ * Notifications of [MachineManager] (logs, UI feedback).
+ */
 sealed interface MachineEvent {
 
     data object Connected :

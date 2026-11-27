@@ -11,12 +11,6 @@ import java.math.RoundingMode
  */
 object WorkshopCommands {
 
-    /** Current position becomes the work origin (G54, persistent). */
-    const val SET_WORK_ZERO = "G10 L20 P1 X0 Y0"
-
-    /** Same, Z included (optional Z axis). */
-    const val SET_WORK_ZERO_XYZ = "G10 L20 P1 X0 Y0 Z0"
-
     /** Air assist: coolant flood output (M8 / M9). */
     const val AIR_ON = "M8"
     const val AIR_OFF = "M9"
@@ -24,10 +18,6 @@ object WorkshopCommands {
     /** Center of [bounds] (work coordinates). */
     fun center(bounds: GCodeBounds): Pair<Double, Double> =
         (bounds.minX + bounds.maxX) / 2.0 to (bounds.minY + bounds.maxY) / 2.0
-
-    /** Laser off jog to an absolute work position (cancellable). */
-    fun jogTo(x: Double, y: Double, feedRate: Double): String =
-        "\$J=G21 G90 X${format(x)} Y${format(y)} F${format(feedRate)}"
 
     /**
      * Laser power value for [percent] of the maximum S ($30).
@@ -41,6 +31,7 @@ object WorkshopCommands {
     /** Low power laser on, machine stopped (M3: constant power). */
     fun laserPointerOn(power: Double): String = "M3 S${format(power)}"
 
+    /** Laser off, power zero. */
     const val LASER_OFF = "M5 S0"
 
     /**
@@ -124,6 +115,7 @@ object WorkshopCommands {
         return commands
     }
 
+    /** 3 decimals max, dot separator, no trailing zeros. */
     fun format(value: Double): String {
         return BigDecimal.valueOf(value)
             .setScale(3, RoundingMode.HALF_UP)

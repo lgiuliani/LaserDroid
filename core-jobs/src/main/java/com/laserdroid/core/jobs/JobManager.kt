@@ -1,6 +1,7 @@
 package com.laserdroid.core.jobs
 
 import com.laserdroid.controllers.api.CncController
+import com.laserdroid.controllers.api.CommandResult
 import com.laserdroid.controllers.api.MachineState
 import com.laserdroid.core.gcode.GCodeAnalysis
 import com.laserdroid.core.gcode.GCodeAnalyzer
@@ -524,6 +525,7 @@ class JobManager(
         true
     }
 
+    /** Cancels the running job coroutine and the internal scope. */
     fun close() {
         runJob?.cancel()
         scope.cancel()
@@ -564,7 +566,7 @@ class JobManager(
                         command,
                         config.ackInactivityTimeoutMillis
                     )
-                    if (ack != com.laserdroid.controllers.api.CommandResult.Acknowledged) {
+                    if (ack != CommandResult.Acknowledged) {
                         runCatching { activeController.stop() }
                         finish(JobState.ERROR, "Preparation command '$command' failed: $ack")
                         return@coroutineScope

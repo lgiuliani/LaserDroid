@@ -17,6 +17,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.core.app.NotificationCompat
 import com.laserdroid.MainActivity
@@ -84,6 +85,8 @@ class MachineService : Service() {
         private const val LIBRARY_DIRECTORY = "library"
         private const val LOG_DIRECTORY = "logs"
         private const val WAKE_LOCK_TAG = "LaserDroid:job"
+        private const val NOTIFICATION_MIN_INTERVAL_MILLIS = 1_000L
+        private val PERCENT_SUFFIX = Regex(" [0-9.]+%$")
 
         /* The LASER button never stays on longer than this. */
         private const val POINTER_MAX_MILLIS = 30_000L
@@ -414,6 +417,7 @@ class MachineService : Service() {
 
         machineManager?.close()
         machineManager = null
+        grblController?.close()
         grblController = null
         usbTransport = null
         connectedDeviceId = null
@@ -1167,10 +1171,34 @@ class MachineService : Service() {
         updateNotification(title, content)
     }
 
+    /*
+     * Status reports arrive at 5 Hz: the notification is only rebuilt
+     * when its text changes, position updates at most once per second
+     * (Android drops too frequent updates and it costs CPU on old
+     * phones). A machine or job state change is always shown at once.
+     */
+    private var lastNotificationTitle: String? = null
+    private var lastNotificationContent: String? = null
+    private var lastNotificationMillis = 0L
+
+    @Synchronized
     private fun updateNotification(title: String, content: String) {
+        val now = SystemClock.elapsedRealtime()
+        val sameState = title.withoutPercent() == lastNotificationTitle?.withoutPercent() &&
+                content.substringBefore(" |") == lastNotificationContent?.substringBefore(" |")
+        if (sameState) {
+            if (title == lastNotificationTitle && content == lastNotificationContent) return
+            if (now - lastNotificationMillis < NOTIFICATION_MIN_INTERVAL_MILLIS) return
+        }
+        lastNotificationTitle = title
+        lastNotificationContent = content
+        lastNotificationMillis = now
         getSystemService(NotificationManager::class.java)
             .notify(NOTIFICATION_ID, createNotification(title, content))
     }
+
+    /* "LaserDroid job RUNNING 12.3%" -> "LaserDroid job RUNNING". */
+    private fun String.withoutPercent(): String = replace(PERCENT_SUFFIX, "")
 
     private fun formatCoordinate(value: Double): String =
         String.format(Locale.US, "%.3f", value)

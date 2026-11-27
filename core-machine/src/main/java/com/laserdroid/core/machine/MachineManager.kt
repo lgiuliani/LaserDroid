@@ -2,12 +2,17 @@ package com.laserdroid.core.machine
 
 import com.laserdroid.controllers.api.CncController
 import com.laserdroid.controllers.api.CommandResult
+import com.laserdroid.controllers.api.ControllerEvent
 import com.laserdroid.controllers.api.JogRequest
-import com.laserdroid.controllers.api.MachinePosition
 import com.laserdroid.controllers.api.MachineState
+import java.math.BigDecimal
+import java.math.RoundingMode
 import kotlin.math.hypot
+import kotlin.math.sqrt
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -20,8 +25,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import com.laserdroid.controllers.api.ControllerEvent
 
+/**
+ * Central arbiter of the machine (specification 3).
+ *
+ * - Publishes a [MachineSnapshot] built from the controller flows.
+ * - Executes manual operations (jog, HOME, unlock, console,
+ *   workshop functions) and refuses them while a job owns the
+ *   machine ([beginJob] / [endJob]).
+ * - Polls the status in the background when no job runs.
+ *
+ * Independent of Android. Call [close] when discarded.
+ */
 class MachineManager(
     private val controller: CncController,
     private val statusPollIntervalMillis: Long = 200L
@@ -41,7 +56,7 @@ class MachineManager(
         private const val DEFAULT_MAX_POWER = 1_000.0
     }
 
-    private var backgroundPollJob: kotlinx.coroutines.Job? = null
+    private var backgroundPollJob: Job? = null
 
     private val _framingActive =
         MutableStateFlow(false)
@@ -260,6 +275,7 @@ class MachineManager(
         }
     }
 
+    /** Connects the controller and starts the background polling. Rethrows failures. */
     suspend fun connect() {
 
         _snapshot.update {
@@ -277,9 +293,8 @@ class MachineManager(
 
         try {
 
+            // connect() requests the first status itself.
             controller.connect()
-
-            controller.requestStatus()
 
             startBackgroundPolling()
 
@@ -322,7 +337,11 @@ class MachineManager(
         }
     }
 
+    /** Disconnects the controller; the snapshot returns to its initial value. */
     suspend fun disconnect() {
+
+        backgroundPollJob?.cancel()
+        backgroundPollJob = null
 
         try {
 
@@ -339,11 +358,13 @@ class MachineManager(
         }
     }
 
+    /** Realtime status query. */
     suspend fun requestStatus() {
 
         controller.requestStatus()
     }
 
+    /** `$$`: refreshes [settings]. Refused during a job. */
     suspend fun requestSettings():
             CommandResult {
 
@@ -356,6 +377,7 @@ class MachineManager(
         )
     }
 
+    /** `$I`: firmware identification. Refused during a job. */
     suspend fun requestBuildInfo():
             CommandResult {
 
@@ -444,7 +466,7 @@ class MachineManager(
                     if (!snapshot.value.jobActive) {
                         try {
                             controller.requestStatus()
-                        } catch (exception: kotlinx.coroutines.CancellationException) {
+                        } catch (exception: CancellationException) {
                             throw exception
                         } catch (exception: Exception) {
                             // Link lost: reported elsewhere.
@@ -586,9 +608,9 @@ class MachineManager(
     }
 
     private fun formatValue(value: Double): String {
-        return java.math.BigDecimal
+        return BigDecimal
             .valueOf(value)
-            .setScale(3, java.math.RoundingMode.HALF_UP)
+            .setScale(3, RoundingMode.HALF_UP)
             .stripTrailingZeros()
             .toPlainString()
     }
@@ -602,6 +624,10 @@ class MachineManager(
         controller.stop()
     }
 
+    /**
+     * Relative jog, then waits until the machine is Idle again
+     * (timeout derived from distance and feed rate).
+     */
     suspend fun executeJog(
         request: JogRequest
     ): MachineOperationResult {
@@ -642,6 +668,10 @@ class MachineManager(
 
                     request.y?.let {
                         append(" Y=$it")
+                    }
+
+                    request.z?.let {
+                        append(" Z=$it")
                     }
 
                     append(
@@ -702,6 +732,7 @@ class MachineManager(
         }
     }
 
+    /** Jog to work X0 Y0, then waits until Idle. */
     suspend fun goToZero(
         feedRate: Double
     ): MachineOperationResult {
@@ -858,6 +889,10 @@ class MachineManager(
         )
     }
 
+    /**
+     * Sends one jog step without waiting for the motion
+     * (continuous jog: steps are chained, then [cancelJog]).
+     */
     suspend fun startContinuousJog(
         request: JogRequest
     ): CommandResult {
@@ -874,6 +909,7 @@ class MachineManager(
         )
     }
 
+    /** Realtime jog cancel, then refreshes the status. */
     suspend fun cancelJog() {
 
         controller.cancelJog()
@@ -976,22 +1012,19 @@ class MachineManager(
         }
     }
 
+    /*
+     * Length of the jog vector, Z included: a Z-only jog must get
+     * a timeout matching its (usually slow) feed rate.
+     */
     private fun calculateJogDistance(
         request: JogRequest
     ): Double {
 
-        val x =
-            request.x
-                ?: 0.0
+        val x = request.x ?: 0.0
+        val y = request.y ?: 0.0
+        val z = request.z ?: 0.0
 
-        val y =
-            request.y
-                ?: 0.0
-
-        return hypot(
-            x,
-            y
-        )
+        return sqrt(x * x + y * y + z * z)
     }
 
     private fun calculateMotionTimeout(
@@ -1054,6 +1087,7 @@ class MachineManager(
         }
     }
 
+    /** Stops polling and observers. The controller is not closed. */
     fun close() {
 
         backgroundPollJob?.cancel()

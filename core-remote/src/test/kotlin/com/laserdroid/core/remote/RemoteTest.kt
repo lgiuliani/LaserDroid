@@ -56,10 +56,14 @@ class RemoteTest {
 
     /* ---------------- VirtualGrblSession ---------------- */
 
-    private class SessionFixture(relay: MachineRelay? = null, clock: () -> Long = System::currentTimeMillis) {
+    private class SessionFixture(
+        relay: MachineRelay? = null,
+        clock: () -> Long = System::currentTimeMillis,
+        maxBytes: Long = 10_000_000L
+    ) {
         val output = StringBuilder()
         val directory: File = Files.createTempDirectory("capture").toFile()
-        val capture = ProgramCapture(directory, 10_000_000L, clock)
+        val capture = ProgramCapture(directory, maxBytes, clock)
         val session = VirtualGrblSession(FakeInfo(), capture, relay, { output.append(it) })
         suspend fun send(text: String) = session.onBytes(text.toByteArray(Charsets.ISO_8859_1))
         fun take(): String = output.toString().also { output.setLength(0) }
@@ -111,6 +115,31 @@ class RemoteTest {
         assertFalse(f.session.isReceiving)
         assertNull(f.capture.finish())
         assertEquals(0, f.directory.listFiles()!!.size)
+    }
+
+    @Test
+    fun `too large program is refused until reset`() = runBlocking<Unit> {
+        val f = SessionFixture(maxBytes = 20L)
+        f.send("G0 X1 Y1\nG1 X2 F100\n")
+        assertEquals("ok\r\nok\r\n", f.take())
+        // 9 + 11 + 11 bytes > 20: refused, capture discarded.
+        f.send("G1 X3 F100\n")
+        assertEquals("error:11\r\n", f.take())
+        assertFalse(f.session.isReceiving)
+        // The end of the refused transfer never starts a new program.
+        f.send("G1 X4\nG1 X5\n")
+        assertEquals("error:11\r\nerror:11\r\n", f.take())
+        assertFalse(f.session.isReceiving)
+        assertEquals(0, f.directory.listFiles()!!.size)
+        // Queries still answered.
+        f.send("\$I\n")
+        assertTrue(f.take().endsWith("ok\r\n"))
+        // Ctrl-X: a new transfer is accepted.
+        f.send("\u0018")
+        f.take()
+        f.send("G0 X1\n")
+        assertEquals("ok\r\n", f.take())
+        assertTrue(f.session.isReceiving)
     }
 
     @Test

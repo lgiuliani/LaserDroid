@@ -1,5 +1,9 @@
 package com.laserdroid.core.streaming
 
+/**
+ * Progress of the current stream: commands sent and acknowledged.
+ * An acknowledgement does not mean the motion was executed.
+ */
 data class StreamingProgress(
     val totalCommands: Int,
     val commandsSent: Int,
@@ -7,6 +11,7 @@ data class StreamingProgress(
     val currentOriginalLine: Long?
 ) {
 
+    /** Acknowledged commands, 0..100. */
     val percent: Double
         get() {
             if (totalCommands == 0) {

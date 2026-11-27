@@ -33,16 +33,13 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.laserdroid.controllers.api.CommandResult
-import com.laserdroid.controllers.api.ControllerEvent
 import com.laserdroid.controllers.api.JogRequest
 import com.laserdroid.controllers.api.MachinePosition
 import com.laserdroid.controllers.api.MachineState
 import com.laserdroid.core.jobs.JobSnapshot
 import com.laserdroid.core.jobs.JobStartResult
-import com.laserdroid.core.jobs.JobState
 import com.laserdroid.core.jobs.RecoveryAssessment
 import com.laserdroid.core.jobs.RecoveryMode
-import com.laserdroid.core.machine.MachineEvent
 import com.laserdroid.core.machine.MachineManager
 import com.laserdroid.core.machine.MachineOperationResult
 import com.laserdroid.core.machine.MachineSnapshot
@@ -175,8 +172,6 @@ class MainActivity : Activity() {
     private var serviceObserverJob: Job? = null
     private var jobObserverJob: Job? = null
     private var jobTickerJob: Job? = null
-    private var managerEventsJob: Job? = null
-    private var controllerEventsJob: Job? = null
     private var managerSettingsJob: Job? = null
     private var continuousJogJob: Job? = null
     private var logJob: Job? = null
@@ -537,10 +532,7 @@ class MainActivity : Activity() {
 
     private fun observeMachineManager(manager: MachineManager) {
 
-        managerEventsJob?.cancel()
-        controllerEventsJob?.cancel()
         managerSettingsJob?.cancel()
-
         managerSettingsJob =
             activityScope.launch {
                 manager.settings.collect { settings ->
@@ -566,10 +558,6 @@ class MainActivity : Activity() {
     private fun cancelBackendObservers() {
         serviceObserverJob?.cancel()
         serviceObserverJob = null
-        managerEventsJob?.cancel()
-        managerEventsJob = null
-        controllerEventsJob?.cancel()
-        controllerEventsJob = null
         managerSettingsJob?.cancel()
         managerSettingsJob = null
         jobObserverJob?.cancel()
@@ -1834,6 +1822,7 @@ class MainActivity : Activity() {
 
         cancelBackendObservers()
         activityScope.cancel()
+        screenHandler.removeCallbacks(dimRunnable)
 
         runCatching { unregisterReceiver(usbPermissionReceiver) }
 

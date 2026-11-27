@@ -15,7 +15,7 @@ dependencies {
     implementation(project(":core-gcode"))
     implementation(project(":controllers-api"))
 
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation(libs.kotlinx.coroutines.core)
 
     // Integration tests
     testImplementation(project(":controllers-grbl"))

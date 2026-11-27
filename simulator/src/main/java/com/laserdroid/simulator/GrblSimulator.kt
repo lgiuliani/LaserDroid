@@ -1,8 +1,11 @@
 package com.laserdroid.simulator
 
+/**
+ * Minimal GRBL 1.1 line protocol simulator: answers `ok` to the
+ * supported commands, `error:1` otherwise, and `error:[errorCode]`
+ * at command number [errorAtCommand].
+ */
 class GrblSimulator {
-
-    var disconnectAtCommand: Int? = null
 
     private val _receivedCommands =
         mutableListOf<String>()
@@ -10,6 +13,7 @@ class GrblSimulator {
     val receivedCommands: List<String>
         get() = _receivedCommands.toList()
 
+    /** 1-based command number answered with an error, or null. */
     var errorAtCommand: Int? = null
 
     var errorCode: Int = 2
@@ -60,9 +64,5 @@ class GrblSimulator {
             else ->
                 "error:1"
         }
-    }
-
-    fun clearHistory() {
-        _receivedCommands.clear()
     }
 }

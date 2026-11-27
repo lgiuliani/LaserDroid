@@ -1,5 +1,9 @@
 package com.laserdroid.controllers.grbl
 
+/**
+ * Rebuilds complete lines from serial chunks (CR, LF or CRLF).
+ * Empty lines are dropped. Not thread-safe.
+ */
 class GrblLineBuffer {
 
     private val buffer = StringBuilder()

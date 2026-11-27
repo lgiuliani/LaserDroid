@@ -1,5 +1,8 @@
 package com.laserdroid.controllers.api
 
+/**
+ * Cartesian position in millimeters.
+ */
 data class MachinePosition(
     val x: Double,
     val y: Double,

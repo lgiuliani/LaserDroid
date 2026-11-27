@@ -47,6 +47,10 @@ data class AppSettings(
 private val Context.laserDroidSettings: DataStore<Preferences> by
 preferencesDataStore(name = "laserdroid_settings")
 
+/**
+ * Persists [AppSettings] in DataStore and exposes them as a StateFlow
+ * (defaults until the first read completes).
+ */
 class SettingsRepository(
     context: Context,
     scope: CoroutineScope
@@ -101,11 +105,11 @@ class SettingsRepository(
             startOnBoot = preferences[Keys.START_ON_BOOT] ?: defaults.startOnBoot,
             soundsEnabled = preferences[Keys.SOUNDS] ?: defaults.soundsEnabled,
             logLevel = preferences[Keys.LOG_LEVEL]
-                ?.let { name -> LogLevel.values().firstOrNull { it.name == name } }
+                ?.let { name -> LogLevel.entries.firstOrNull { it.name == name } }
                 ?: defaults.logLevel,
             remoteEnabled = preferences[Keys.REMOTE_ENABLED] ?: defaults.remoteEnabled,
             remoteMode = preferences[Keys.REMOTE_MODE]
-                ?.let { name -> RemoteMode.values().firstOrNull { it.name == name } }
+                ?.let { name -> RemoteMode.entries.firstOrNull { it.name == name } }
                 ?: defaults.remoteMode,
             remoteWebSocket = preferences[Keys.REMOTE_WEBSOCKET] ?: defaults.remoteWebSocket,
             remoteRelay = preferences[Keys.REMOTE_RELAY] ?: defaults.remoteRelay,

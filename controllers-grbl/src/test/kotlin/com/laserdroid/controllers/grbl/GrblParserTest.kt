@@ -75,4 +75,31 @@ class GrblParserTest {
         assertEquals(null, response.machineZ)
         assertEquals(null, response.feedRate)
     }
+
+    @Test
+    fun `setting line is parsed`() {
+        assertEquals(GrblResponse.Setting(110, "6000.000"), parser.parse("\$110=6000.000"))
+    }
+
+    @Test
+    fun `work position, offset and buffer fields are parsed`() {
+        val response = parser.parse("<Run|WPos:1.5,-2.000,0.000|Bf:15,128|FS:1000,500|WCO:10.000,20.000,0.000>")
+
+        assertIs<GrblResponse.Status>(response)
+        assertEquals("Run", response.state)
+        assertEquals(null, response.machineX)
+        assertEquals(1.5, response.workX)
+        assertEquals(-2.0, response.workY)
+        assertEquals(10.0, response.offsetX)
+        assertEquals(15, response.plannerBlocksFree)
+        assertEquals(128, response.serialBytesFree)
+        assertEquals(1000, response.feedRate)
+        assertEquals(500, response.spindleSpeed)
+    }
+
+    @Test
+    fun `bracketed messages and unknown lines are kept`() {
+        assertEquals(GrblResponse.Message("[MSG:Caution: Unlocked]"), parser.parse("[MSG:Caution: Unlocked]"))
+        assertEquals(GrblResponse.Unknown("Grbl 1.1h ['\$' for help]"), parser.parse("Grbl 1.1h ['\$' for help]"))
+    }
 }

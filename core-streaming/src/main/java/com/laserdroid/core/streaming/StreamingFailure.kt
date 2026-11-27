@@ -1,5 +1,8 @@
 package com.laserdroid.core.streaming
 
+/**
+ * Why a stream stopped before its end.
+ */
 sealed interface StreamingFailure {
 
     data class Rejected(

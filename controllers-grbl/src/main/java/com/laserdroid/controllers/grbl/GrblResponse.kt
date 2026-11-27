@@ -1,5 +1,8 @@
 package com.laserdroid.controllers.grbl
 
+/**
+ * One line received from GRBL.
+ */
 sealed interface GrblResponse {
 
     data object Ok : GrblResponse

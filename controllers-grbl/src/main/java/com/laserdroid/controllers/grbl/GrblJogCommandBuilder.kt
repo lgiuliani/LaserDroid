@@ -3,7 +3,22 @@ package com.laserdroid.controllers.grbl
 import com.laserdroid.controllers.api.JogRequest
 import java.math.BigDecimal
 
+/**
+ * Builds GRBL 1.1 relative jog commands (`$J=G21 G91 X.. Y.. Z.. F..`).
+ */
 class GrblJogCommandBuilder {
+
+    companion object {
+
+        /** Plain decimal notation, dot separator, no trailing zeros. */
+        fun format(value: Double): String {
+            return BigDecimal
+                .valueOf(value)
+                .stripTrailingZeros()
+                .toPlainString()
+        }
+    }
+
 
     fun build(
         request: JogRequest
@@ -41,15 +56,5 @@ class GrblJogCommandBuilder {
         return parts.joinToString(
             separator = " "
         )
-    }
-
-    private fun format(
-        value: Double
-    ): String {
-
-        return BigDecimal
-            .valueOf(value)
-            .stripTrailingZeros()
-            .toPlainString()
     }
 }

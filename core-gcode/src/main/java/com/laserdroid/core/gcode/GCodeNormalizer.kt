@@ -1,5 +1,9 @@
 package com.laserdroid.core.gcode
 
+/**
+ * Removes comments (`;` and `( )`) and surrounding spaces.
+ * The command itself is never altered.
+ */
 class GCodeNormalizer {
 
     fun normalize(

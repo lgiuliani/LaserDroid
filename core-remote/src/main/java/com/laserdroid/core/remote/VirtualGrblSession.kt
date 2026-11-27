@@ -12,6 +12,9 @@ package com.laserdroid.core.remote
  *   program: the real machine is never reset from here.
  * - $J=, 0x85 and $X are relayed when [relay] is set; any other
  *   $ command is refused (error:9): settings are not written.
+ * - A program larger than the capture limit is refused (error:11)
+ *   until the next Ctrl-X: the end of a refused transfer never
+ *   becomes a new program.
  * - Nothing is ever started automatically.
  */
 class VirtualGrblSession(
@@ -27,9 +30,13 @@ class VirtualGrblSession(
         const val CTRL_X = 0x18
         const val JOG_CANCEL = 0x85
         const val REFUSED = "error:9"
+        const val OVERFLOW = "error:11"
     }
 
     private val line = StringBuilder()
+
+    /* Size limit reached: G-code lines are refused until Ctrl-X. */
+    private var overflowed = false
 
     var commandsAnswered: Long = 0L
         private set
@@ -67,6 +74,7 @@ class VirtualGrblSession(
 
     private suspend fun reset() {
         line.setLength(0)
+        overflowed = false
         if (capture.isCapturing) {
             log("Reset from LaserGRBL: partial program discarded (${capture.lines} lines)")
             capture.cancel()
@@ -91,12 +99,14 @@ class VirtualGrblSession(
                 log("Refused from LaserGRBL: $text")
                 send("$REFUSED\r\n")
             }
+            overflowed -> send("$OVERFLOW\r\n")
             else -> {
                 if (capture.append(text)) {
                     ok()
                 } else {
+                    overflowed = true
                     log("Program too large: transfer cancelled")
-                    send("error:11\r\n")
+                    send("$OVERFLOW\r\n")
                 }
             }
         }

@@ -3,6 +3,9 @@ package com.laserdroid.core.machine
 import com.laserdroid.controllers.api.MachinePosition
 import com.laserdroid.controllers.api.MachineState
 
+/**
+ * Immutable view of the machine published by [MachineManager].
+ */
 data class MachineSnapshot(
     val connectionState: MachineConnectionState,
     val machineState: MachineState,
@@ -20,6 +23,7 @@ data class MachineSnapshot(
             connectionState ==
                     MachineConnectionState.CONNECTED
 
+    /** Manual motion allowed: no job and machine Idle or jogging. */
     val canJog: Boolean
         get() =
             !jobActive &&

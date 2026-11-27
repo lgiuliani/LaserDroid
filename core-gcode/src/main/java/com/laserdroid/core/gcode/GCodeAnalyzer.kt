@@ -278,6 +278,10 @@ class GCodeAnalyzer(
                             40 -> dwell = true
                             100, 280, 300, 920 -> {
                                 nonModalWithAxes = true
+                                if (code == 280 || code == 300) {
+                                    // Goes to a stored position, axes or not.
+                                    positionKnown = false
+                                }
                                 warn(
                                     lineNumber,
                                     GCodeWarningSeverity.WARNING,

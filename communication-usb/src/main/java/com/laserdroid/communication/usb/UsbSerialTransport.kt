@@ -8,6 +8,9 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
+/**
+ * [SerialTransport] over a [UsbSerialConnection].
+ */
 class UsbSerialTransport(
     private val connection: UsbSerialConnection,
     private val device: UsbDevice
@@ -22,9 +25,14 @@ class UsbSerialTransport(
             StateFlow<ConnectionState>
         get() = _connectionState
 
+    /*
+     * Filled from the USB reader thread with tryEmit: the buffer
+     * must absorb collector hiccups, a dropped chunk would lose
+     * an "ok" (chunks are small, 1024 slots cost little).
+     */
     private val _incomingData =
         MutableSharedFlow<ByteArray>(
-            extraBufferCapacity = 64
+            extraBufferCapacity = 1_024
         )
 
     override val incomingData:

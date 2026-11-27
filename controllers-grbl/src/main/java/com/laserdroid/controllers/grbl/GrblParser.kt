@@ -1,5 +1,9 @@
 package com.laserdroid.controllers.grbl
 
+/**
+ * Parses one complete GRBL line into a [GrblResponse].
+ * Never throws: unknown lines become [GrblResponse.Unknown].
+ */
 class GrblParser {
 
     fun parse(line: String): GrblResponse {

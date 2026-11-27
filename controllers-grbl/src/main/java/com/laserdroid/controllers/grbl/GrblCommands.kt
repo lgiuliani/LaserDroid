@@ -1,5 +1,11 @@
 package com.laserdroid.controllers.grbl
 
+/**
+ * GRBL 1.1 commands (specification 6).
+ *
+ * Line commands end with a newline; realtime commands are single
+ * bytes processed immediately by GRBL.
+ */
 object GrblCommands {
 
     const val STATUS = "?"

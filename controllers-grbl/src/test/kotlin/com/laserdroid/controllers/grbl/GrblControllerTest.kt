@@ -9,7 +9,6 @@ import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import com.laserdroid.controllers.api.CommandResult
-import kotlinx.coroutines.async
 import kotlin.test.assertIs
 import com.laserdroid.controllers.api.JogRequest
 

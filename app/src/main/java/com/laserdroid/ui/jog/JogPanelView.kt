@@ -10,7 +10,6 @@ import android.view.ViewConfiguration
 import android.widget.TextView
 import android.widget.FrameLayout
 import com.laserdroid.R
-import com.laserdroid.controllers.api.MachinePosition
 import com.laserdroid.controllers.api.MachineState
 import com.laserdroid.ui.common.ChoiceChipsView
 import java.math.BigDecimal
@@ -244,10 +243,6 @@ class JogPanelView @JvmOverloads constructor(
         speedChips.isEnabled = connected
         cancelButton.isEnabled = connected
     }
-
-    /** Kept for compatibility: the position is shown by the status bar. */
-    @Suppress("UNUSED_PARAMETER")
-    fun updateMachinePosition(position: MachinePosition) = Unit
 
     private fun formatNumber(value: Double): String {
         return BigDecimal.valueOf(value).stripTrailingZeros().toPlainString()

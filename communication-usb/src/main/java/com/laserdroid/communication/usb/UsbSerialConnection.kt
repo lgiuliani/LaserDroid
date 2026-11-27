@@ -8,14 +8,25 @@ import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.hoho.android.usbserial.util.SerialInputOutputManager
 
+/**
+ * Opens a USB serial adapter (CH340, CP210x, FTDI, PL2303, CDC/ACM)
+ * with usb-serial-for-android at 115200 8N1 and forwards the
+ * received bytes to [onDataReceived].
+ *
+ * Read errors (cable removed...) are reported to [onConnectionError].
+ */
 class UsbSerialConnection(
     context: Context
 ) {
     private var ioManager:
             SerialInputOutputManager? = null
 
+    /** Called on the USB reader thread for every received chunk. */
+    @Volatile
     var onDataReceived: ((ByteArray) -> Unit)? = null
 
+    /** Called on the USB reader thread when reading fails. */
+    @Volatile
     var onConnectionError: ((Exception) -> Unit)? = null
 
     private val usbManager =
@@ -26,27 +37,11 @@ class UsbSerialConnection(
     private var deviceConnection:
             UsbDeviceConnection? = null
 
+    @Volatile
     private var serialPort:
             UsbSerialPort? = null
 
-    fun findSupportedDevice(): UsbDevice? {
-
-        val drivers =
-            UsbSerialProber
-                .getDefaultProber()
-                .findAllDrivers(usbManager)
-
-        return drivers
-            .firstOrNull()
-            ?.device
-    }
-
-    fun hasPermission(
-        device: UsbDevice
-    ): Boolean {
-        return usbManager.hasPermission(device)
-    }
-
+    /** Opens the first port of [device]. Requires the USB permission. */
     fun open(
         device: UsbDevice
     ): UsbConnectionResult {
@@ -132,6 +127,7 @@ class UsbSerialConnection(
         }
     }
 
+    /** Stops the reader and closes the port. Safe to call twice. */
     fun close() {
 
         ioManager?.stop()
@@ -147,6 +143,7 @@ class UsbSerialConnection(
         deviceConnection = null
     }
 
+    /** Blocking write (2 s timeout). Throws when the port is closed. */
     fun write(
         data: ByteArray
     ) {

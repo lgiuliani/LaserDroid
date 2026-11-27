@@ -1,6 +1,7 @@
 package com.laserdroid.communication.network
 
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.io.InputStream
 import java.net.Socket
 import java.util.Collections
@@ -13,6 +14,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class NetworkTest {
@@ -31,6 +33,17 @@ class NetworkTest {
         val second = filter.filter(byteArrayOf(0xFF.toByte(), '\n'.code.toByte()))
         assertEquals(listOf(0x3F, 0x85, 0x18, 0x47), first.map { it.toInt() and 0xFF })
         assertEquals(listOf(0xFF, 0x0A), second.map { it.toInt() and 0xFF })
+    }
+
+    @Test
+    fun `websocket frame with an invalid length is rejected`() {
+        // FIN + TEXT, masked, 64-bit length with the high bit set.
+        val frame = byteArrayOf(0x81.toByte(), 0xFF.toByte()) +
+                ByteArray(8) { 0xFF.toByte() } +
+                byteArrayOf(1, 2, 3, 4) // mask
+        assertFailsWith<IOException> {
+            WebSocketProtocol.readFrame(ByteArrayInputStream(frame))
+        }
     }
 
     @Test

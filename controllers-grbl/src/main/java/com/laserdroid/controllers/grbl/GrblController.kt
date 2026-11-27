@@ -1,12 +1,18 @@
 package com.laserdroid.controllers.grbl
 
+import com.laserdroid.communication.api.ConnectionState
 import com.laserdroid.communication.api.SerialTransport
 import com.laserdroid.controllers.api.CncController
+import com.laserdroid.controllers.api.CommandResult
 import com.laserdroid.controllers.api.ControllerCapabilities
 import com.laserdroid.controllers.api.ControllerEvent
+import com.laserdroid.controllers.api.JogRequest
 import com.laserdroid.controllers.api.MachinePosition
 import com.laserdroid.controllers.api.MachineState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -16,16 +22,24 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import com.laserdroid.controllers.api.CommandResult
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.CoroutineStart
-import com.laserdroid.communication.api.ConnectionState
-import com.laserdroid.controllers.api.JogRequest
+import kotlinx.coroutines.withTimeoutOrNull
 
+/**
+ * GRBL 1.1 driver over a [SerialTransport].
+ *
+ * - Line commands are sent one at a time (send/response): a command
+ *   waits for its `ok` / `error:N` / `ALARM:N` before the next one.
+ * - Realtime commands (`?`, `!`, `~`, Ctrl-X, jog cancel) bypass the
+ *   line protocol and are written immediately.
+ * - Status reports update [machineState], [machinePosition] and
+ *   [workCoordinateOffset].
+ * - A startup banner means GRBL restarted: the pending command is
+ *   completed with [CommandResult.Reset].
+ *
+ * Call [close] when the controller is discarded.
+ */
 class GrblController(
     private val transport: SerialTransport
 ) : CncController {
@@ -42,11 +56,13 @@ class GrblController(
     }
 
     /*
-     * Timestamp of the last data received from GRBL.
+     * Monotonic timestamp of the last data received from GRBL.
      * Used by the inactivity timeout of executeCommand().
      */
     @Volatile
     private var lastReceiveMillis = 0L
+
+    private fun nowMillis(): Long = System.nanoTime() / 1_000_000L
 
     private val _workCoordinateOffset =
         MutableStateFlow(MachinePosition.ZERO)
@@ -240,7 +256,7 @@ class GrblController(
 
             awaitResponse(
                 response = response,
-                sentAtMillis = System.currentTimeMillis(),
+                sentAtMillis = nowMillis(),
                 inactivityTimeoutMillis = inactivityTimeoutMillis
             )
         } catch (
@@ -288,7 +304,7 @@ class GrblController(
                 maxOf(sentAtMillis, lastReceiveMillis)
 
             if (
-                System.currentTimeMillis() - lastActivity >=
+                nowMillis() - lastActivity >=
                 inactivityTimeoutMillis
             ) {
                 return CommandResult.Timeout
@@ -328,8 +344,7 @@ class GrblController(
 
             transport.incomingData.collect { data ->
 
-                lastReceiveMillis =
-                    System.currentTimeMillis()
+                lastReceiveMillis = nowMillis()
 
                 val completedLines =
                     lineBuffer.append(data)
@@ -361,16 +376,17 @@ class GrblController(
 
             is GrblResponse.Error -> {
 
+                /*
+                 * error:N only rejects the line: GRBL keeps its
+                 * state (Idle, Run...). The machine state is not
+                 * changed, otherwise the machine would look
+                 * disconnected until the next status report.
+                 */
                 pendingCommand?.complete(
                     CommandResult.Rejected(
                         code = response.code
                     )
                 )
-
-                _machineState.value =
-                    MachineState.Error(
-                        "GRBL error ${response.code}"
-                    )
 
                 _events.emit(
                     ControllerEvent.ErrorReceived(
@@ -536,6 +552,7 @@ class GrblController(
         }
     }
 
+    /** Sends `$$`: every setting is published as [ControllerEvent.SettingReceived]. */
     suspend fun requestSettings(): CommandResult {
 
         return executeCommand(
@@ -543,6 +560,7 @@ class GrblController(
         )
     }
 
+    /** Sends `$I`: `[VER:...]` / `[OPT:...]` are published as messages. */
     suspend fun requestBuildInfo(): CommandResult {
 
         return executeCommand(
@@ -651,15 +669,20 @@ class GrblController(
             )
         }
 
-        val formattedFeedRate =
-            java.math.BigDecimal
-                .valueOf(feedRate)
-                .stripTrailingZeros()
-                .toPlainString()
-
         return executeCommand(
-            "\$J=G21 G90 X0 Y0 F$formattedFeedRate"
+            GrblCommands.JOG_PREFIX +
+                    "G21 G90 X0 Y0 F" +
+                    GrblJogCommandBuilder.format(feedRate)
         )
     }
 
+    /**
+     * Stops the internal coroutines. The controller must not be
+     * used afterwards; the transport is not closed.
+     */
+    override fun close() {
+        pendingCommand?.complete(CommandResult.Disconnected)
+        pendingCommand = null
+        scope.cancel()
+    }
 }

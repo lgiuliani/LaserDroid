@@ -1,5 +1,8 @@
 package com.laserdroid.core.gcode
 
+/**
+ * In-memory program. Large files use a [GCodeSource] instead.
+ */
 data class GCodeProgram(
     val name: String,
     val lines: List<GCodeLine>

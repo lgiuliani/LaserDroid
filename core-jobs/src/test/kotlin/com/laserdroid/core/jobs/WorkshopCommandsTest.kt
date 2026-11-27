@@ -60,10 +60,9 @@ class WorkshopCommandsTest {
     }
 
     @Test
-    fun `center and jog to`() {
+    fun `center of the bounds`() {
         val (x, y) = WorkshopCommands.center(GCodeBounds(5.0, 10.0, 25.0, 30.0))
         assertEquals(15.0, x)
         assertEquals(20.0, y)
-        assertEquals("\$J=G21 G90 X15 Y20 F3000", WorkshopCommands.jogTo(x, y, 3_000.0))
     }
 }

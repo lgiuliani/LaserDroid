@@ -198,6 +198,16 @@ class GCodeAnalyzerTest {
     }
 
     @Test
+    fun `G28 without axes makes the position unknown`() {
+        // After G28 the head is at the stored home: the next move
+        // must not be drawn from X10 Y10.
+        val result = analyze("G0 X10 Y10\nG28\nG0 X20 Y20\nG0 X30 Y20")
+        assertEquals(1, result.preview.segmentCount)
+        assertClose(20.0, result.preview.x1(0).toDouble())
+        assertClose(10.0, result.rapidDistanceMm)
+    }
+
+    @Test
     fun `dwell is added to duration`() {
         val result = analyze("G4 P1.5")
         assertEquals(1_500L, result.estimatedDurationMillis)

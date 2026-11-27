@@ -1,5 +1,9 @@
 package com.laserdroid.controllers.api
 
+/**
+ * Relative jog: distances in millimeters (null = axis not moved),
+ * [feedRate] in mm/min. Invalid values are rejected at creation.
+ */
 data class JogRequest(
     val x: Double? = null,
     val y: Double? = null,
