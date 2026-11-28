@@ -198,9 +198,12 @@ class MachineManagerTest {
     @Test
     fun `settings are collected and set the laser power`() = runBlocking {
         val (manager, controller) = connected()
-        controller.events.emit(ControllerEvent.SettingReceived(30, "500.000"))
+        // The collector may not be subscribed yet (no replay): re-emit.
         withTimeout(1_000L) {
-            while (manager.settings.value[30] == null) delay(5)
+            while (manager.settings.value[30] == null) {
+                controller.events.emit(ControllerEvent.SettingReceived(30, "500.000"))
+                delay(5)
+            }
         }
 
         assertEquals(500.0, manager.maxLaserPower)

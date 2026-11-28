@@ -91,6 +91,7 @@ class MainActivity : Activity() {
         private const val MAX_LOG_CHARACTERS = 60_000
 
         private const val REQUEST_OPEN_GCODE = 4201
+        private const val REQUEST_CAMERA = 4202
 
         private const val JOB_DISPLAY_REFRESH_MS = 1_000L
 
@@ -144,6 +145,13 @@ class MainActivity : Activity() {
     private lateinit var remotePauseSwitch: CompoundButton
     private lateinit var remoteInfoText: TextView
     private lateinit var remoteBadgeText: TextView
+    private lateinit var cameraSwitch: CompoundButton
+    private lateinit var cameraFacingChips: ChoiceChipsView
+    private lateinit var cameraQualityChips: ChoiceChipsView
+    private lateinit var cameraFpsChips: ChoiceChipsView
+    private lateinit var cameraRotationChips: ChoiceChipsView
+    private lateinit var cameraExposureChips: ChoiceChipsView
+    private lateinit var cameraInfoText: TextView
     private lateinit var logText: TextView
     private lateinit var logScrollView: ScrollView
     private lateinit var commandInput: EditText
@@ -178,6 +186,7 @@ class MainActivity : Activity() {
     private var settingsJob: Job? = null
     private var framingStateJob: Job? = null
     private var remoteJob: Job? = null
+    private var cameraJob: Job? = null
 
     /* Suppresses listeners while settings are displayed. */
     private var displayingSettings = false
@@ -264,6 +273,8 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         renderBootHelp()
+        // Camera in background needs the service promoted while visible.
+        machineService?.refreshCameraForeground()
     }
 
     override fun onPause() {
@@ -323,6 +334,13 @@ class MainActivity : Activity() {
         remotePauseSwitch = findViewById(R.id.switchRemotePause)
         remoteInfoText = findViewById(R.id.textRemoteInfo)
         remoteBadgeText = findViewById(R.id.textRemoteBadge)
+        cameraSwitch = findViewById(R.id.switchCamera)
+        cameraFacingChips = findViewById(R.id.chipsCameraFacing)
+        cameraQualityChips = findViewById(R.id.chipsCameraQuality)
+        cameraFpsChips = findViewById(R.id.chipsCameraFps)
+        cameraRotationChips = findViewById(R.id.chipsCameraRotation)
+        cameraExposureChips = findViewById(R.id.chipsCameraExposure)
+        cameraInfoText = findViewById(R.id.textCameraInfo)
         logText = findViewById(R.id.textLog)
         logScrollView = findViewById(R.id.logScrollView)
         commandInput = findViewById(R.id.editCommand)
@@ -520,6 +538,8 @@ class MainActivity : Activity() {
         observeServiceLog(service)
         observeSettings(service)
         observeRemote(service)
+        observeCamera(service)
+        service.refreshCameraForeground()
 
         /*
          * After a rotation the backend already exists:
@@ -572,6 +592,8 @@ class MainActivity : Activity() {
         framingStateJob = null
         remoteJob?.cancel()
         remoteJob = null
+        cameraJob?.cancel()
+        cameraJob = null
     }
 
     private fun requireMachineManager(): MachineManager? {
@@ -1574,6 +1596,7 @@ class MainActivity : Activity() {
             machineService?.disconnectRemoteClient()
         }
         remoteBadgeText.setOnClickListener { showPage(PAGE_SERVER) }
+        configureCamera()
 
         findViewById<View>(R.id.buttonHistory).setOnClickListener { showHistoryDialog() }
         findViewById<View>(R.id.buttonLibrary).setOnClickListener { showOpenDialog() }
@@ -1600,7 +1623,14 @@ class MainActivity : Activity() {
         remoteWebSocketSwitch.isChecked = settings.remoteWebSocket
         remoteRelaySwitch.isChecked = settings.remoteRelay
         remotePauseSwitch.isChecked = settings.remotePauseOnLoss
+        cameraSwitch.isChecked = settings.cameraEnabled
+        cameraFacingChips.selectValue(if (settings.cameraBack) 0.0 else 1.0)
+        cameraQualityChips.selectValue(if (settings.cameraHd) 1.0 else 0.0)
+        cameraFpsChips.selectValue(settings.cameraFps.toDouble())
+        cameraRotationChips.selectValue(settings.cameraRotation.toDouble())
+        cameraExposureChips.selectValue(settings.cameraExposure.toDouble())
         displayingSettings = false
+        renderCamera(service, service.cameraStatus.value)
 
         remoteModeHelp.text =
             if (settings.remoteMode == RemoteMode.RECEPTION) {
@@ -1683,6 +1713,112 @@ class MainActivity : Activity() {
             if (status.programsReceived > 0) {
                 append("\nPrograms received: ${status.programsReceived}")
             }
+        }
+    }
+
+    /*
+     * ----------------------------------------------------
+     * LIVE CAMERA
+     * ----------------------------------------------------
+     */
+
+    private fun configureCamera() {
+        cameraFacingChips.setChoices(listOf(0.0, 1.0), 0.0) { if (it == 0.0) "BACK" else "FRONT" }
+        cameraQualityChips.setChoices(listOf(0.0, 1.0), 0.0) { if (it == 0.0) "640x480" else "1280x720" }
+        cameraFpsChips.setChoices(listOf(5.0, 10.0, 15.0), 10.0) { formatNumber(it) }
+        cameraRotationChips.setChoices(listOf(0.0, 90.0, 180.0, 270.0), 0.0) { formatNumber(it) + "°" }
+        cameraExposureChips.setChoices(listOf(-2.0, -1.0, 0.0, 1.0, 2.0), 0.0) { value ->
+            if (value > 0.0) "+" + formatNumber(value) else formatNumber(value)
+        }
+
+        cameraSwitch.setOnCheckedChangeListener { _, checked ->
+            if (displayingSettings) return@setOnCheckedChangeListener
+            if (checked && checkSelfPermission(android.Manifest.permission.CAMERA) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissions(arrayOf(android.Manifest.permission.CAMERA), REQUEST_CAMERA)
+                return@setOnCheckedChangeListener
+            }
+            enableCamera(checked)
+        }
+        cameraFacingChips.onValueSelected = { value ->
+            machineService?.updateSettings { it.copy(cameraBack = value == 0.0) }
+        }
+        cameraQualityChips.onValueSelected = { value ->
+            machineService?.updateSettings { it.copy(cameraHd = value == 1.0) }
+        }
+        cameraFpsChips.onValueSelected = { value ->
+            machineService?.updateSettings { it.copy(cameraFps = value.toInt()) }
+        }
+        cameraRotationChips.onValueSelected = { value ->
+            machineService?.updateSettings { it.copy(cameraRotation = value.toInt()) }
+        }
+        cameraExposureChips.onValueSelected = { value ->
+            machineService?.updateSettings { it.copy(cameraExposure = value.toInt()) }
+        }
+        findViewById<View>(R.id.buttonCameraNewKey).setOnClickListener {
+            machineService?.regenerateCameraKey()
+        }
+    }
+
+    private fun enableCamera(enabled: Boolean) {
+        val service = machineService ?: return
+        service.updateSettings { it.copy(cameraEnabled = enabled) }
+        activityScope.launch {
+            // Let the setting reach the service, then promote it (visible app).
+            delay(300.milliseconds)
+            service.refreshCameraForeground()
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_CAMERA) return
+        val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            enableCamera(true)
+        } else {
+            appendLog("Camera permission refused.")
+            displayingSettings = true
+            cameraSwitch.isChecked = false
+            displayingSettings = false
+        }
+    }
+
+    private fun observeCamera(service: MachineService) {
+        cameraJob?.cancel()
+        cameraJob =
+            activityScope.launch {
+                service.cameraStatus.collect { status ->
+                    renderCamera(service, status)
+                }
+            }
+    }
+
+    private fun renderCamera(service: MachineService, status: MachineService.CameraStatus) {
+        cameraInfoText.text = buildString {
+            if (!status.enabled) {
+                append("Camera off.")
+                return@buildString
+            }
+            status.error?.let {
+                append("Error: $it")
+                return@buildString
+            }
+            val port = status.port ?: MachineService.LIVE_PORT
+            val key = service.settings.value.cameraKey
+            append("Open in a browser (same Wi-Fi):\n")
+            service.localIpAddresses().ifEmpty { listOf("(no Wi-Fi)") }.forEach { address ->
+                append("  http://$address:$port/?key=$key\n")
+            }
+            append("\nViewers: ${status.viewers}")
+            append(if (status.running) "  · camera running" else "  · camera idle")
+            if (!status.permission) append("\nCamera permission missing.")
         }
     }
 

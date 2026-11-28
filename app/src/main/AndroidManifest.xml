@@ -35,6 +35,17 @@
     <uses-permission
         android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Live camera (remote monitoring, optional). -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+    <uses-permission
+        android:name="android.permission.CAMERA" />
+
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+
     <!-- Optional start when the phone boots. -->
     <uses-permission
         android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -132,7 +143,7 @@
         <service
             android:name=".service.MachineService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|camera" />
 
     </application>
 

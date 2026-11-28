@@ -100,6 +100,112 @@
             android:textColor="@color/ld_text_secondary"
             android:textSize="11sp" />
 
+        <TextView
+            style="@style/LdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="18dp"
+            android:text="LIVE CAMERA (BROWSER)" />
+
+        <TextView
+            android:id="@+id/textCameraInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_input"
+            android:padding="8dp"
+            android:textColor="@color/ld_text"
+            android:textIsSelectable="true"
+            android:textSize="13sp"
+            android:typeface="monospace" />
+
+        <Switch
+            android:id="@+id/switchCamera"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:paddingStart="6dp"
+            android:text="Live camera (http 8080)"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            style="@style/LdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:text="CAMERA" />
+
+        <com.laserdroid.ui.common.ChoiceChipsView
+            android:id="@+id/chipsCameraFacing"
+            android:layout_width="match_parent"
+            android:layout_height="44dp" />
+
+        <TextView
+            style="@style/LdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:text="RESOLUTION" />
+
+        <com.laserdroid.ui.common.ChoiceChipsView
+            android:id="@+id/chipsCameraQuality"
+            android:layout_width="match_parent"
+            android:layout_height="44dp" />
+
+        <TextView
+            style="@style/LdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:text="FRAMES PER SECOND" />
+
+        <com.laserdroid.ui.common.ChoiceChipsView
+            android:id="@+id/chipsCameraFps"
+            android:layout_width="match_parent"
+            android:layout_height="44dp" />
+
+        <TextView
+            style="@style/LdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:text="ROTATION IN THE BROWSER" />
+
+        <com.laserdroid.ui.common.ChoiceChipsView
+            android:id="@+id/chipsCameraRotation"
+            android:layout_width="match_parent"
+            android:layout_height="44dp" />
+
+        <TextView
+            style="@style/LdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:text="EXPOSURE (EV, lower = less laser glare)" />
+
+        <com.laserdroid.ui.common.ChoiceChipsView
+            android:id="@+id/chipsCameraExposure"
+            android:layout_width="match_parent"
+            android:layout_height="44dp" />
+
+        <TextView
+            android:id="@+id/buttonCameraNewKey"
+            style="@style/LdButton"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:drawableStart="@drawable/ic_lock_open"
+            android:paddingStart="24dp"
+            android:paddingEnd="48dp"
+            android:text="NEW ACCESS KEY" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="4dp"
+            android:paddingTop="8dp"
+            android:text="Never point the camera at the laser beam or its direct reflection: it can damage the sensor. A laser safety filter (orange acrylic) in front of the lens also protects it and reduces glare. The camera only runs while a browser watches."
+            android:textColor="@color/ld_text_secondary"
+            android:textSize="11sp" />
+
     </LinearLayout>
 
 </ScrollView>

@@ -9,17 +9,24 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import com.laserdroid.communication.network.LiveStreamPage
+import com.laserdroid.communication.network.LiveStreamServer
+import com.laserdroid.communication.network.ServerState
 import com.laserdroid.MainActivity
 import com.laserdroid.R
 import com.laserdroid.communication.usb.UsbSerialConnection
@@ -103,6 +110,10 @@ class MachineService : Service() {
         /* LaserGRBL over Wi-Fi (ports >= 1024: no root needed). */
         const val TELNET_PORT = 2323
         const val WEBSOCKET_PORT = 8181
+
+        /* Live camera page / MJPEG stream. */
+        const val LIVE_PORT = 8080
+        private const val CAMERA_IDLE_STOP_MILLIS = 5_000L
         private const val REMOTE_DIRECTORY = "remote"
     }
 
@@ -191,6 +202,25 @@ class MachineService : Service() {
     val remoteStatus: StateFlow<RemoteStatus>
         get() = remoteManager.status
 
+    /* Live camera. */
+    data class CameraStatus(
+        val enabled: Boolean = false,
+        val port: Int? = null,
+        val viewers: Int = 0,
+        val running: Boolean = false,
+        val permission: Boolean = false,
+        val error: String? = null
+    )
+
+    private lateinit var cameraStreamer: CameraStreamer
+    private lateinit var liveServer: LiveStreamServer
+    private var cameraStopJob: Job? = null
+    private var appliedCamera: CameraStreamer.Config? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val _cameraStatus = MutableStateFlow(CameraStatus())
+    val cameraStatus: StateFlow<CameraStatus> = _cameraStatus.asStateFlow()
+
     /*
      * ----------------------------------------------------
      * USB DETACH
@@ -224,10 +254,7 @@ class MachineService : Service() {
 
         registerUsbDetachReceiver()
         createNotificationChannel()
-        startForeground(
-            NOTIFICATION_ID,
-            createNotification("LaserDroid", "Machine service ready")
-        )
+        startForegroundWithTypes(camera = false)
 
         remoteManager = RemoteManager(
             info = remoteMachineInfo,
@@ -236,6 +263,18 @@ class MachineService : Service() {
             captureDirectory = File(cacheDir, REMOTE_DIRECTORY),
             onProgramReceived = { program -> onRemoteProgram(program) },
             log = { message -> logBook.info(message) }
+        )
+
+        cameraStreamer = CameraStreamer(applicationContext) { message -> logBook.info(message) }
+        liveServer = LiveStreamServer(
+            port = LIVE_PORT,
+            frames = cameraStreamer,
+            statusJson = { buildStatusJson() },
+            page = { LiveStreamPage.HTML },
+            accessKey = { settings.value.cameraKey },
+            scope = serviceScope,
+            maxFps = { settings.value.cameraFps },
+            onViewersChanged = { count -> onCameraViewers(count) }
         )
 
         observeSettings()
@@ -252,6 +291,8 @@ class MachineService : Service() {
     override fun onDestroy() {
         runCatching { unregisterReceiver(usbDetachReceiver) }
         remoteManager.close()
+        liveServer.stop()
+        cameraStreamer.stop()
         releaseRemoteLocks()
         closeMachineBackend("Service stopped")
         releaseJobWakeLock()
@@ -307,6 +348,7 @@ class MachineService : Service() {
                         relayEnabled = value.remoteRelay
                     )
                 )
+                applyCameraSettings(value)
             }
         }
     }
@@ -1046,6 +1088,182 @@ class MachineService : Service() {
 
     private fun formatTriple(position: MachinePosition): String =
         String.format(Locale.US, "%.3f,%.3f,%.3f", position.x, position.y, position.z)
+
+    /*
+     * ----------------------------------------------------
+     * LIVE CAMERA
+     * ----------------------------------------------------
+     */
+
+    private fun cameraConfig(value: AppSettings) = CameraStreamer.Config(
+        backCamera = value.cameraBack,
+        width = if (value.cameraHd) 1280 else 640,
+        height = if (value.cameraHd) 720 else 480,
+        fps = value.cameraFps,
+        exposure = value.cameraExposure
+    )
+
+    private fun applyCameraSettings(value: AppSettings) {
+        if (!value.cameraEnabled) {
+            if (liveServer.state.value !is ServerState.Stopped) {
+                liveServer.stop()
+                cameraStreamer.stop()
+                appliedCamera = null
+                startForegroundWithTypes(camera = false)
+                logBook.info("Live camera off.")
+            }
+            _cameraStatus.value = CameraStatus(permission = cameraStreamer.hasPermission())
+            return
+        }
+
+        if (value.cameraKey.isEmpty()) {
+            // Persisted, the collector is called again with the key.
+            updateSettings { it.copy(cameraKey = newAccessKey()) }
+            return
+        }
+
+        if (liveServer.state.value is ServerState.Stopped) {
+            refreshCameraForeground()
+            liveServer.start()
+            val state = liveServer.state.value
+            if (state is ServerState.Failed) {
+                logBook.error("Live camera server: ${state.message}")
+            } else {
+                logBook.info("Live camera on port $LIVE_PORT.")
+            }
+        }
+
+        // Settings changed while streaming: restart the camera.
+        val config = cameraConfig(value)
+        if (cameraStreamer.isRunning && appliedCamera != config) {
+            cameraStreamer.stop()
+            cameraStreamer.start(config)
+            appliedCamera = config
+        }
+        updateCameraStatus()
+    }
+
+    /*
+     * The camera runs only while somebody watches (battery, heat).
+     */
+    private fun onCameraViewers(count: Int) {
+        if (count > 0) {
+            cameraStopJob?.cancel()
+            cameraStopJob = null
+            if (!cameraStreamer.isRunning) {
+                val config = cameraConfig(settings.value)
+                cameraStreamer.start(config)
+                appliedCamera = config
+                logBook.info("Live camera viewer connected.")
+            }
+        } else {
+            cameraStopJob?.cancel()
+            cameraStopJob = serviceScope.launch {
+                delay(CAMERA_IDLE_STOP_MILLIS)
+                cameraStreamer.stop()
+                appliedCamera = null
+                updateCameraStatus()
+            }
+        }
+        updateCameraStatus()
+    }
+
+    private fun updateCameraStatus() {
+        val state = liveServer.state.value
+        _cameraStatus.value = CameraStatus(
+            enabled = settings.value.cameraEnabled,
+            port = (state as? ServerState.Listening)?.port,
+            viewers = liveServer.viewerCount,
+            running = cameraStreamer.isRunning,
+            permission = cameraStreamer.hasPermission(),
+            error = (state as? ServerState.Failed)?.message
+        )
+    }
+
+    /**
+     * Android 11+: camera access in background needs a "camera"
+     * foreground service started while the app is visible. Called
+     * by the Activity (onResume, permission granted).
+     */
+    fun refreshCameraForeground() {
+        val camera = settings.value.cameraEnabled && cameraStreamer.hasPermission()
+        startForegroundWithTypes(camera)
+        updateCameraStatus()
+    }
+
+    private fun startForegroundWithTypes(camera: Boolean) {
+        val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                (if (camera) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0)
+        val start = {
+            runCatching {
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    createNotification("LaserDroid", "Machine service ready"),
+                    types
+                )
+            }.onFailure { exception ->
+                if (camera) {
+                    logBook.warning("Camera service type refused (open LaserDroid): ${exception.message}")
+                    runCatching {
+                        ServiceCompat.startForeground(
+                            this,
+                            NOTIFICATION_ID,
+                            createNotification("LaserDroid", "Machine service ready"),
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                        )
+                    }
+                }
+            }
+            Unit
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) start() else mainHandler.post { start() }
+    }
+
+    fun regenerateCameraKey() {
+        updateSettings { it.copy(cameraKey = newAccessKey()) }
+        logBook.info("New live camera access key.")
+    }
+
+    private fun newAccessKey(): String {
+        val random = java.security.SecureRandom()
+        return (1..6).map { random.nextInt(10) }.joinToString("")
+    }
+
+    /** JSON for the web page: machine, position, job. */
+    private fun buildStatusJson(): String {
+        val machine = snapshot.value
+        val offset = workCoordinateOffset
+        val job = jobSnapshot.value
+        val now = System.currentTimeMillis()
+        val state = when (machine.machineState) {
+            MachineState.Disconnected -> "OFFLINE"
+            MachineState.Connecting -> "CONNECTING"
+            MachineState.Idle -> "IDLE"
+            MachineState.Running -> "RUN"
+            MachineState.Jog -> "JOG"
+            MachineState.Hold -> "HOLD"
+            MachineState.Alarm -> "ALARM"
+            is MachineState.Error -> "ERROR"
+        }
+        val number = { value: Double -> String.format(Locale.US, "%.3f", value) }
+        val hasJob = job.state != JobState.EMPTY && job.name != null
+        return buildString {
+            append("{\"machine\":").append(LiveStreamServer.jsonString(state))
+            append(",\"x\":").append(number(machine.position.x - offset.x))
+            append(",\"y\":").append(number(machine.position.y - offset.y))
+            append(",\"z\":").append(number(machine.position.z - offset.z))
+            append(",\"zAxis\":").append(settings.value.zAxisEnabled)
+            append(",\"jobName\":").append(LiveStreamServer.jsonString(if (hasJob) job.name else null))
+            append(",\"jobState\":").append(LiveStreamServer.jsonString(job.state.name))
+            append(",\"percent\":").append(String.format(Locale.US, "%.1f", job.percent))
+            append(",\"elapsedMs\":").append(if (job.startedAtMillis != null) job.elapsedMillis(now).toString() else "null")
+            append(",\"remainingMs\":").append(job.remainingMillis(now)?.toString() ?: "null")
+            append(",\"laserOff\":").append(job.laserOff)
+            append(",\"rotation\":").append(settings.value.cameraRotation)
+            append("}")
+        }
+    }
 
     /*
      * ----------------------------------------------------
