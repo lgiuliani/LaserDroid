@@ -26,6 +26,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.laserdroid.communication.network.LiveStreamPage
 import com.laserdroid.communication.network.LiveStreamServer
+import com.laserdroid.communication.network.PreviewJson
 import com.laserdroid.communication.network.ServerState
 import com.laserdroid.MainActivity
 import com.laserdroid.R
@@ -271,6 +272,8 @@ class MachineService : Service() {
             frames = cameraStreamer,
             statusJson = { buildStatusJson() },
             page = { LiveStreamPage.HTML },
+            preview = { buildPreviewJson() },
+            control = { action -> webControl(action) },
             accessKey = { settings.value.cameraKey },
             scope = serviceScope,
             maxFps = { settings.value.cameraFps },
@@ -1261,7 +1264,52 @@ class MachineService : Service() {
             append(",\"remainingMs\":").append(job.remainingMillis(now)?.toString() ?: "null")
             append(",\"laserOff\":").append(job.laserOff)
             append(",\"rotation\":").append(settings.value.cameraRotation)
+            append(",\"line\":").append(job.currentLine?.toString() ?: "null")
+            append(",\"previewId\":").append(
+                LiveStreamServer.jsonString(job.analysis?.let { previewIdOf(it) })
+            )
+            append(",\"framing\":").append(isFraming)
+            append(",\"canPause\":").append(job.state.canPause)
+            append(",\"canStop\":").append(job.state.isActive || isFraming)
             append("}")
+        }
+    }
+
+    private fun previewIdOf(analysis: GCodeAnalysis): String =
+        Integer.toHexString(System.identityHashCode(analysis))
+
+    /** Reduced preview of the loaded job, cached per analysis. */
+    @Volatile
+    private var webPreviewCache: Pair<GCodeAnalysis, String>? = null
+
+    private fun buildPreviewJson(): String? {
+        val analysis = jobSnapshot.value.analysis ?: return null
+        webPreviewCache?.let { (cached, json) -> if (cached === analysis) return json }
+        val path = analysis.preview
+        val reduced = PreviewJson.reduce(path.segmentCount, path.coordinates, path.types, path.lineNumbers)
+        val bounds = analysis.totalBounds
+        val json = PreviewJson.encode(
+            previewIdOf(analysis), reduced,
+            bounds?.minX, bounds?.minY, bounds?.maxX, bounds?.maxY
+        )
+        webPreviewCache = analysis to json
+        return json
+    }
+
+    /** Web page commands: pause and stop only, resuming stays on the phone. */
+    private suspend fun webControl(action: String): String? {
+        logBook.warning("Live page: $action requested.")
+        return when (action) {
+            "pause" -> if (jobManager.pause()) null else "Nothing to pause"
+            "stop" -> when {
+                isFraming -> {
+                    stopFraming()
+                    null
+                }
+                jobManager.stop() -> null
+                else -> "Nothing to stop"
+            }
+            else -> "Unknown action"
         }
     }
 
